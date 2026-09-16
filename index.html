@@ -175,7 +175,34 @@
       ],
       cycle: [0,2,4,3,1,5]
     },
-    trapezohedron: { label: "Pentagonal Trapezohedron (d10)", available: false },
+    trapezohedron: {
+      label: "Pentagonal Trapezohedron (d10)",
+      available: true,
+      // Dual of a pentagonal antiprism: two 5-valent apexes plus a
+      // zig-zag equatorial ring of ten 3-valent vertices, sized so
+      // each kite face (apex, ring, ring, ring) is planar.
+      vertices: (function(){
+        var a = 0.15, R = 1, h = 9.472135954999583 * a;
+        var deg = Math.PI / 180;
+        function ring(k, z){
+          var ang = k * 72 * deg + (z < 0 ? 36 * deg : 0);
+          return [R * Math.cos(ang), R * Math.sin(ang), z];
+        }
+        var verts = [[0, 0, h], [0, 0, -h]];
+        for (var k = 0; k < 5; k++) verts.push(ring(k, a));
+        for (var k = 0; k < 5; k++) verts.push(ring(k, -a));
+        return verts;
+      })(),
+      faces: (function(){
+        var U = function(k){ return 2 + ((k % 5) + 5) % 5; };
+        var L = function(k){ return 7 + ((k % 5) + 5) % 5; };
+        var faces = [];
+        for (var k = 0; k < 5; k++) faces.push([0, U(k), L(k), U(k + 1)]);
+        for (var k = 0; k < 5; k++) faces.push([1, L(k), U(k + 1), L(k + 1)]);
+        return faces;
+      })(),
+      cycle: [0,2,7,3,8,4,9,5,10,1,11,6]
+    },
     dodecahedron: {
       label: "Dodecahedron (d12)",
       available: true,
@@ -376,7 +403,8 @@
 
   // ---- UI wiring ----
   var select = document.getElementById("shapeSelect");
-  Object.keys(POLYHEDRA).forEach(function(key){
+  var SHAPE_ORDER = ["tetrahedron", "cube", "octahedron", "trapezohedron", "dodecahedron", "icosahedron"];
+  SHAPE_ORDER.forEach(function(key){
     var data = POLYHEDRA[key];
     var opt = document.createElement("option");
     opt.value = key;
