@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Hamiltonian Cycles on Polyhedra</title>
+<meta name="description" content="Interactive 3D visualizer: a Hamiltonian cycle splits a polyhedron's faces into two halves that each carry every vertex.">
+<style>
+  :root{
+    --bg:#12141c;
+    --panel:#1b1e29;
+    --panel-border:#2c303e;
+    --text:#e8e9ee;
+    --text-dim:#9198ab;
+    --accent:#ffd54a;
+    --groupA:#e0524b;
+    --groupB:#3fa7a0;
+  }
+  *{box-sizing:border-box;}
+  html,body{
+    margin:0; padding:0; height:100%;
+    background:var(--bg); color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  #app{
+    display:flex; flex-direction:column; height:100vh; overflow:hidden;
+  }
+  header{
+    padding:14px 20px 10px;
+    border-bottom:1px solid var(--panel-border);
+    background:var(--panel);
+  }
+  header h1{
+    margin:0 0 4px; font-size:1.15rem; font-weight:600;
+  }
+  header p{
+    margin:0; font-size:0.85rem; color:var(--text-dim); max-width:70ch;
+  }
+  #main{
+    flex:1; display:flex; min-height:0;
+  }
+  #canvas-wrap{
+    flex:1; position:relative; min-width:0;
+  }
+  #canvas-wrap canvas{ display:block; width:100%; height:100%; }
+  #sidebar{
+    width:280px; flex:none;
+    padding:16px; overflow-y:auto;
+    background:var(--panel);
+    border-left:1px solid var(--panel-border);
+  }
+  .field{ margin-bottom:18px; }
+  .field label{
+    display:block; font-size:0.8rem; color:var(--text-dim);
+    margin-bottom:6px; text-transform:uppercase; letter-spacing:0.03em;
+  }
+  select, input[type=range]{ width:100%; }
+  select{
+    background:#11131a; color:var(--text); border:1px solid var(--panel-border);
+    border-radius:6px; padding:8px; font-size:0.9rem;
+  }
+  .row{ display:flex; justify-content:space-between; align-items:center; }
+  .value{ font-variant-numeric:tabular-nums; color:var(--accent); font-size:0.85rem; }
+  #legend{ font-size:0.82rem; line-height:1.5; }
+  #legend .swatch{
+    display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:6px;
+  }
+  #stats{
+    margin-top:6px; padding-top:14px; border-top:1px solid var(--panel-border);
+    font-size:0.8rem; color:var(--text-dim); line-height:1.6;
+  }
+  #stats b{ color:var(--text); }
+  .checkbox-row{ display:flex; align-items:center; gap:8px; font-size:0.85rem; }
+  .checkbox-row input{ width:auto; }
+  option:disabled{ color:#5b6070; }
+  @media (max-width: 720px){
+    #main{ flex-direction:column; }
+    #sidebar{
+      width:auto; border-left:none; border-top:1px solid var(--panel-border);
+      max-height:42vh;
+    }
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <h1>Hamiltonian Cycles on Polyhedra</h1>
+    <p>A Hamiltonian cycle visits every vertex exactly once. On a polyhedron's surface it also acts as a seam: it splits the faces into two caps, and because the cycle itself passes through every vertex, <strong>both caps keep the full vertex set on their rim</strong> when pulled apart. Drag to orbit, use the panel to separate the caps.</p>
+  </header>
+  <div id="main">
+    <div id="canvas-wrap"></div>
+    <div id="sidebar">
+      <div class="field">
+        <label for="shapeSelect">Polyhedron</label>
+        <select id="shapeSelect"></select>
+      </div>
+      <div class="field">
+        <div class="row">
+          <label for="sepSlider" style="margin-bottom:0">Separation</label>
+          <span class="value" id="sepValue">0.00</span>
+        </div>
+        <input type="range" id="sepSlider" min="0" max="2.5" step="0.01" value="0">
+      </div>
+      <div class="field checkbox-row">
+        <input type="checkbox" id="autoRotate">
+        <label for="autoRotate" style="margin:0; text-transform:none; letter-spacing:normal;">Auto-rotate</label>
+      </div>
+      <div id="legend">
+        <div><span class="swatch" style="background:var(--groupA)"></span>Cap A</div>
+        <div><span class="swatch" style="background:var(--groupB)"></span>Cap B</div>
+        <div><span class="swatch" style="background:var(--accent)"></span>Hamiltonian cycle (seam)</div>
+      </div>
+      <div id="stats"></div>
+    </div>
+  </div>
+</div>
+
+<script src="vendor/three/three.min.js"></script>
+<script src="vendor/three/OrbitControls.js"></script>
+<script>
+(function(){
+  "use strict";
+
+  var PHI = (1 + Math.sqrt(5)) / 2;
+
+  // Each shape carries its own vertices/faces plus one known Hamiltonian
+  // cycle (a vertex-index sequence). Shapes without a cycle yet are kept
+  // in the list as disabled options so the selector's final shape (all six
+  // RPG dice) is visible from the start.
+  var POLYHEDRA = {
+    icosahedron: {
+      label: "Icosahedron (d20)",
+      available: true,
+      vertices: [
+        [-1, PHI, 0], [1, PHI, 0], [-1, -PHI, 0], [1, -PHI, 0],
+        [0, -1, PHI], [0, 1, PHI], [0, -1, -PHI], [0, 1, -PHI],
+        [PHI, 0, -1], [PHI, 0, 1], [-PHI, 0, -1], [-PHI, 0, 1]
+      ],
+      faces: [
+        [0,11,5],[0,5,1],[0,1,7],[0,7,10],[0,10,11],
+        [1,5,9],[5,11,4],[11,10,2],[10,7,6],[7,1,8],
+        [3,9,4],[3,4,2],[3,2,6],[3,6,8],[3,8,9],
+        [4,9,5],[2,4,11],[6,2,10],[8,6,7],[9,8,1]
+      ],
+      cycle: [0,11,5,1,7,6,3,8,9,4,2,10]
+    },
+    tetrahedron: { label: "Tetrahedron (d4)", available: false },
+    cube: { label: "Cube (d6)", available: false },
+    octahedron: { label: "Octahedron (d8)", available: false },
+    trapezohedron: { label: "Pentagonal Trapezohedron (d10)", available: false },
+    dodecahedron: { label: "Dodecahedron (d12)", available: false }
+  };
+
+  function edgeKey(a, b){ return a < b ? a + "-" + b : b + "-" + a; }
+
+  // A Hamiltonian cycle removes itself from the face-adjacency (dual)
+  // graph as a cut, so flood-filling that graph without crossing cycle
+  // edges yields exactly the two caps the cycle separates.
+  function computeFacePartition(faces, cycle){
+    var cycleEdges = {};
+    for (var i = 0; i < cycle.length; i++){
+      cycleEdges[edgeKey(cycle[i], cycle[(i + 1) % cycle.length])] = true;
+    }
+    var faceEdgeMap = {};
+    faces.forEach(function(f, fi){
+      for (var k = 0; k < f.length; k++){
+        var key = edgeKey(f[k], f[(k + 1) % f.length]);
+        (faceEdgeMap[key] = faceEdgeMap[key] || []).push(fi);
+      }
+    });
+    var adj = faces.map(function(){ return []; });
+    Object.keys(faceEdgeMap).forEach(function(key){
+      var list = faceEdgeMap[key];
+      if (list.length === 2 && !cycleEdges[key]){
+        adj[list[0]].push(list[1]);
+        adj[list[1]].push(list[0]);
+      }
+    });
+    var compOf = new Array(faces.length).fill(-1);
+    var comp = 0;
+    for (var s = 0; s < faces.length; s++){
+      if (compOf[s] !== -1) continue;
+      var queue = [s];
+      compOf[s] = comp;
+      while (queue.length){
+        var f = queue.shift();
+        adj[f].forEach(function(nb){
+          if (compOf[nb] === -1){ compOf[nb] = comp; queue.push(nb); }
+        });
+      }
+      comp++;
+    }
+    return { compOf: compOf, count: comp };
+  }
+
+  function triangulateFace(face){
+    if (face.length === 3) return [face];
+    var tris = [];
+    for (var i = 1; i < face.length - 1; i++){
+      tris.push([face[0], face[i], face[i + 1]]);
+    }
+    return tris;
+  }
+
+  // ---- three.js scene ----
+  var wrap = document.getElementById("canvas-wrap");
+  var scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x12141c);
+
+  var camera = new THREE.PerspectiveCamera(45, 1, 0.1, 100);
+  camera.position.set(4.2, 3.2, 5.2);
+
+  var renderer = new THREE.WebGLRenderer({ antialias: true });
+  wrap.appendChild(renderer.domElement);
+
+  var controls = new THREE.OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = true;
+  controls.dampingFactor = 0.08;
+
+  scene.add(new THREE.AmbientLight(0xffffff, 0.55));
+  var key1 = new THREE.DirectionalLight(0xffffff, 0.8);
+  key1.position.set(5, 6, 4);
+  scene.add(key1);
+  var key2 = new THREE.DirectionalLight(0xffffff, 0.35);
+  key2.position.set(-4, -3, -5);
+  scene.add(key2);
+
+  var sphereGeo = new THREE.SphereGeometry(0.06, 16, 16);
+  var groupColors = [0xe0524b, 0x3fa7a0];
+
+  var currentGroups = null;
+  var currentDirections = null;
+  var currentSeparation = 0;
+
+  function clearScene(){
+    if (currentGroups){
+      currentGroups.forEach(function(g){ scene.remove(g); });
+    }
+    currentGroups = null;
+    currentDirections = null;
+  }
+
+  function buildShape(key){
+    clearScene();
+    var data = POLYHEDRA[key];
+    if (!data || !data.available) return;
+
+    var positions = data.vertices.map(function(v){ return new THREE.Vector3(v[0], v[1], v[2]); });
+    var partition = computeFacePartition(data.faces, data.cycle);
+    var compOf = partition.compOf;
+
+    var posArrays = [[], []];
+    var faceCounts = [0, 0];
+    var centroidSum = [new THREE.Vector3(), new THREE.Vector3()];
+
+    data.faces.forEach(function(face, fi){
+      var g = compOf[fi];
+      var faceCentroid = new THREE.Vector3();
+      face.forEach(function(vi){ faceCentroid.add(positions[vi]); });
+      faceCentroid.divideScalar(face.length);
+      centroidSum[g].add(faceCentroid);
+      faceCounts[g]++;
+
+      triangulateFace(face).forEach(function(tri){
+        tri.forEach(function(vi){
+          var p = positions[vi];
+          posArrays[g].push(p.x, p.y, p.z);
+        });
+      });
+    });
+
+    var directions = centroidSum.map(function(sum, g){
+      return sum.clone().divideScalar(faceCounts[g] || 1).normalize();
+    });
+
+    var groups = [];
+    for (var g = 0; g < 2; g++){
+      var container = new THREE.Group();
+
+      var geo = new THREE.BufferGeometry();
+      geo.setAttribute("position", new THREE.Float32BufferAttribute(posArrays[g], 3));
+      geo.computeVertexNormals();
+      var mat = new THREE.MeshStandardMaterial({
+        color: groupColors[g], side: THREE.DoubleSide,
+        flatShading: true, roughness: 0.55, metalness: 0.05
+      });
+      container.add(new THREE.Mesh(geo, mat));
+
+      var linePts = data.cycle.map(function(vi){ return positions[vi].clone(); });
+      var lineGeo = new THREE.BufferGeometry().setFromPoints(linePts);
+      var lineMat = new THREE.LineBasicMaterial({ color: 0xffd54a, linewidth: 2 });
+      container.add(new THREE.LineLoop(lineGeo, lineMat));
+
+      var vertMat = new THREE.MeshBasicMaterial({ color: 0xfff2c8 });
+      data.cycle.forEach(function(vi){
+        var m = new THREE.Mesh(sphereGeo, vertMat);
+        m.position.copy(positions[vi]);
+        container.add(m);
+      });
+
+      scene.add(container);
+      groups.push(container);
+    }
+
+    currentGroups = groups;
+    currentDirections = directions;
+    applySeparation(currentSeparation);
+
+    document.getElementById("stats").innerHTML =
+      "<b>" + data.vertices.length + "</b> vertices &middot; " +
+      "<b>" + data.faces.length + "</b> faces &middot; " +
+      "<b>" + data.cycle.length + "</b>-edge cycle<br>" +
+      "Cap A: <b>" + faceCounts[0] + "</b> faces, " + data.vertices.length + " vertices<br>" +
+      "Cap B: <b>" + faceCounts[1] + "</b> faces, " + data.vertices.length + " vertices";
+  }
+
+  function applySeparation(value){
+    currentSeparation = value;
+    if (!currentGroups) return;
+    currentGroups.forEach(function(g, i){
+      g.position.copy(currentDirections[i]).multiplyScalar(value);
+    });
+  }
+
+  // ---- UI wiring ----
+  var select = document.getElementById("shapeSelect");
+  Object.keys(POLYHEDRA).forEach(function(key){
+    var data = POLYHEDRA[key];
+    var opt = document.createElement("option");
+    opt.value = key;
+    opt.textContent = data.label + (data.available ? "" : " — coming soon");
+    opt.disabled = !data.available;
+    select.appendChild(opt);
+  });
+  select.value = "icosahedron";
+  select.addEventListener("change", function(){ buildShape(select.value); });
+
+  var sepSlider = document.getElementById("sepSlider");
+  var sepValue = document.getElementById("sepValue");
+  sepSlider.addEventListener("input", function(){
+    var v = parseFloat(sepSlider.value);
+    sepValue.textContent = v.toFixed(2);
+    applySeparation(v);
+  });
+
+  var autoRotate = document.getElementById("autoRotate");
+  autoRotate.addEventListener("change", function(){
+    controls.autoRotate = autoRotate.checked;
+  });
+  controls.autoRotateSpeed = 1.6;
+
+  function resize(){
+    var w = wrap.clientWidth, h = wrap.clientHeight;
+    camera.aspect = w / h;
+    camera.updateProjectionMatrix();
+    renderer.setSize(w, h);
+  }
+  window.addEventListener("resize", resize);
+
+  function animate(){
+    requestAnimationFrame(animate);
+    controls.update();
+    renderer.render(scene, camera);
+  }
+
+  resize();
+  buildShape("icosahedron");
+  animate();
+})();
+</script>
+</body>
+</html>
