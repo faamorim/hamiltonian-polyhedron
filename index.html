@@ -70,6 +70,12 @@
     font-size:0.8rem; color:var(--text-dim); line-height:1.6;
   }
   #stats b{ color:var(--text); }
+  #credit{
+    margin-top:14px; padding-top:14px; border-top:1px solid var(--panel-border);
+    font-size:0.78rem; color:var(--text-dim); line-height:1.5;
+  }
+  #credit a{ color:var(--accent); text-decoration:none; }
+  #credit a:hover{ text-decoration:underline; }
   .checkbox-row{ display:flex; align-items:center; gap:8px; font-size:0.85rem; }
   .checkbox-row input{ width:auto; }
   option:disabled{ color:#5b6070; }
@@ -112,6 +118,10 @@
         <div><span class="swatch" style="background:var(--accent)"></span>Hamiltonian cycle (seam)</div>
       </div>
       <div id="stats"></div>
+      <div id="credit">
+        Inspired by the mathematical art of
+        <a href="https://gallery.bridgesmathart.org/exhibitions/bridges-2026-exhibition-of-mathematical-art/josep-rey-nadal" target="_blank" rel="noopener">Josep Rey Nadal</a>.
+      </div>
     </div>
   </div>
 </div>
