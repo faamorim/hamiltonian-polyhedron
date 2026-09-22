@@ -6,9 +6,11 @@ Solid lines are each strip's outer silhouette (cut here). Dashed lines are
 the internal edges between faces (fold here, mountain-fold so the strip
 curls toward you the way the printed 3D version will).
 
-Must be printed at 100% / "Actual Size" -- NOT "Fit to page" -- since the
-triangle edges are drawn at true millimeter scale, matching the 3D-printed
-prototype from gen_flat_strip.py exactly.
+Must be printed at 100% / "Actual Size" -- NOT "Fit to page". The edge
+length is auto-scaled to the largest size that fits both nets side by side
+on one landscape sheet (with a safety margin) -- this is a standalone
+paper/cardboard test of the fold geometry, not meant to match the 3D
+prototype's scale (bigger is easier to fold and see clearly by hand).
 
 Requires: pip install matplotlib
 
@@ -22,13 +24,16 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 
 from gen_flat_strip import (
-    FACES, CYCLE, TARGET_EDGE,
+    FACES, CYCLE,
     internal_adjacency, split_into_caps, walk_path, unfold, edge_key,
 )
 
-PAGE_W_MM, PAGE_H_MM = 215.9, 279.4  # US Letter; swap for A4 (210 x 297) if you prefer
+# Landscape US Letter -- swap for (297, 210) for landscape A4.
+PAGE_W_MM, PAGE_H_MM = 279.4, 215.9
 MM_PER_INCH = 25.4
-GAP_MM = 15  # horizontal gap between the two strips on the page
+GAP_MM = 15       # horizontal gap between the two strips on the page
+MARGIN_MM = 10    # safe margin on all sides (most printers can't print edge-to-edge)
+HEADER_MM = 25    # vertical space reserved for the title/instructions at the top
 
 
 def net_bbox(path, face_2d):
@@ -72,11 +77,31 @@ def draw_net(ax, path, face_2d, ox, oy):
             ax.plot([pa[0], pb[0]], [pa[1], pb[1]], **style)
 
 
+def largest_edge_that_fits(paths, usable_w, usable_h):
+    """Both nets scale linearly with edge length, so measure their footprint
+    at 1mm edges and solve directly for the biggest edge length that keeps
+    the side-by-side layout within the page."""
+    unit_2ds = [unfold(p, 1.0) for p in paths]
+    unit_boxes = [net_bbox(paths[i], unit_2ds[i]) for i in range(2)]
+    unit_w = [b[1] - b[0] for b in unit_boxes]
+    unit_h = [b[3] - b[2] for b in unit_boxes]
+
+    edge_for_width = (usable_w - GAP_MM) / sum(unit_w)
+    edge_for_height = usable_h / max(unit_h)
+    return min(edge_for_width, edge_for_height)
+
+
 if __name__ == "__main__":
     adj = internal_adjacency(FACES, CYCLE)
     caps = split_into_caps(FACES, adj)
     paths = [walk_path(cap, adj) for cap in caps]
-    face_2ds = [unfold(p, TARGET_EDGE) for p in paths]
+
+    usable_w = PAGE_W_MM - 2 * MARGIN_MM
+    usable_h = PAGE_H_MM - 2 * MARGIN_MM - HEADER_MM
+    edge_len = largest_edge_that_fits(paths, usable_w, usable_h)
+    print(f"using edge length {edge_len:.1f}mm (largest that fits {PAGE_W_MM:.0f}x{PAGE_H_MM:.0f}mm landscape)")
+
+    face_2ds = [unfold(p, edge_len) for p in paths]
     bboxes = [net_bbox(paths[i], face_2ds[i]) for i in range(2)]
     widths = [b[1] - b[0] for b in bboxes]
     heights = [b[3] - b[2] for b in bboxes]
@@ -92,7 +117,7 @@ if __name__ == "__main__":
     ax.axis("off")
 
     start_x = (PAGE_W_MM - total_w) / 2
-    y_center = (PAGE_H_MM - 30) / 2  # leave room for the header at the top
+    y_center = MARGIN_MM + usable_h / 2  # center within the space below the header
     cursor_x = start_x
     for i in range(2):
         xmin, xmax, ymin, ymax = bboxes[i]
@@ -104,7 +129,7 @@ if __name__ == "__main__":
         cursor_x += widths[i] + GAP_MM
 
     ax.text(PAGE_W_MM / 2, PAGE_H_MM - 15,
-             f"Hamiltonian Polyhedron -- flat nets, both caps ({TARGET_EDGE:.0f}mm edges)",
+             f"Hamiltonian Polyhedron -- flat nets, both caps ({edge_len:.0f}mm edges)",
              ha="center", fontsize=11, weight="bold")
     ax.text(PAGE_W_MM / 2, PAGE_H_MM - 22,
              "Print at 100% / Actual Size (not \"Fit to page\"). "
