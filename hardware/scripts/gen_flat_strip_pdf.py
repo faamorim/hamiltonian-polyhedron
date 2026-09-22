@@ -84,13 +84,11 @@ def net_polygon(path, face_2d):
 # Handle tabs: small flags a student folds up perpendicular to the paper and
 # pinches to hold the assembled bowl, instead of touching the fragile
 # curved surface directly (a "stick marionette" rather than gripping the
-# model itself). Two tabs per cap, one on each of these free edges -- picked
-# because the fold simulation shows they land only ~11mm apart in 3D (both
-# touch the same real icosahedron vertex), so the two flags end up right
-# next to each other and can be pinched as one handle.
+# model itself). One tab at each extremity of the strip, so a cap is held
+# from both of its ends rather than from two adjacent points.
 TAB_EDGES = {
-    0: [(14, 8, 3), (12, 3, 6)],
-    1: [(13, 3, 8), (19, 9, 8)],
+    0: [(14, 8, 3), (0, 0, 11)],
+    1: [(13, 3, 8), (4, 11, 0)],
 }
 TAB_BASE_FRAC = 0.55   # width at the fold line, as a fraction of the edge length
 TAB_TOP_FRAC = 0.40    # width at the outer tip
