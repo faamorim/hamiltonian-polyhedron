@@ -33,7 +33,7 @@ PAGE_W_MM, PAGE_H_MM = 279.4, 215.9
 MM_PER_INCH = 25.4
 GAP_MM = 15       # horizontal gap between the two strips on the page
 MARGIN_MM = 10    # safe margin on all sides (most printers can't print edge-to-edge)
-HEADER_MM = 25    # vertical space reserved for the title/instructions at the top
+HEADER_MM = 15    # vertical space reserved for the title at the top
 
 
 def net_bbox(path, face_2d):
@@ -129,12 +129,8 @@ if __name__ == "__main__":
         cursor_x += widths[i] + GAP_MM
 
     ax.text(PAGE_W_MM / 2, PAGE_H_MM - 15,
-             f"Hamiltonian Polyhedron -- flat nets, both caps ({edge_len:.0f}mm edges)",
+             "Hamiltonian Polyhedron - Icosahedron",
              ha="center", fontsize=11, weight="bold")
-    ax.text(PAGE_W_MM / 2, PAGE_H_MM - 22,
-             "Print at 100% / Actual Size (not \"Fit to page\"). "
-             "Solid = cut. Dashed = fold (mountain fold, toward you).",
-             ha="center", fontsize=8, color="0.3")
 
     with PdfPages("hardware/tests/flat_strip_template.pdf") as pdf:
         pdf.savefig(fig)
