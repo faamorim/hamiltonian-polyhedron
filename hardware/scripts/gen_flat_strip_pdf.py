@@ -81,6 +81,48 @@ def net_polygon(path, face_2d):
     return unary_union(tris)
 
 
+# Handle tabs: small flags a student folds up perpendicular to the paper and
+# pinches to hold the assembled bowl, instead of touching the fragile
+# curved surface directly (a "stick marionette" rather than gripping the
+# model itself). Two tabs per cap, one on each of these free edges -- picked
+# because the fold simulation shows they land only ~11mm apart in 3D (both
+# touch the same real icosahedron vertex), so the two flags end up right
+# next to each other and can be pinched as one handle.
+TAB_EDGES = {
+    0: [(14, 8, 3), (12, 3, 6)],
+    1: [(13, 3, 8), (19, 9, 8)],
+}
+TAB_BASE_FRAC = 0.55   # width at the fold line, as a fraction of the edge length
+TAB_TOP_FRAC = 0.40    # width at the outer tip
+TAB_HEIGHT_FRAC = 0.45  # how far the tab protrudes, as a fraction of the edge length
+
+
+def tab_polygon_points(face_2d, fi, a, b):
+    """The tab's 4 outer corners in the same LOCAL (pre-page-transform) 2D
+    frame as the rest of that net, so it can go through the same rotate/
+    translate pipeline as everything else."""
+    pts = dict(face_2d[fi])
+    pa, pb = np.array(pts[a]), np.array(pts[b])
+    c = np.mean([p for _, p in face_2d[fi]], axis=0)
+    edge_len = np.linalg.norm(pb - pa)
+    d = (pb - pa) / edge_len
+    n = np.array([-d[1], d[0]])
+    m = (pa + pb) / 2
+    if np.dot(n, m - c) < 0:
+        n = -n
+    base_w, top_w, h = edge_len * TAB_BASE_FRAC, edge_len * TAB_TOP_FRAC, edge_len * TAB_HEIGHT_FRAC
+    base1, base2 = m - d * base_w / 2, m + d * base_w / 2
+    tip1, tip2 = m + n * h - d * top_w / 2, m + n * h + d * top_w / 2
+    return [tuple(base1), tuple(tip1), tuple(tip2), tuple(base2)]
+
+
+def net_polygon_with_tabs(cap_idx, path, face_2d):
+    poly = net_polygon(path, face_2d)
+    for fi, a, b in TAB_EDGES.get(cap_idx, []):
+        poly = unary_union([poly, Polygon(tab_polygon_points(face_2d, fi, a, b))])
+    return poly
+
+
 def best_nesting_offset(poly_a, poly_b_aligned, usable_w, usable_h, gap_mm, step=0.1):
     """poly_b_aligned is already in the same orientation as poly_a (0 deg
     relative rotation, established separately as optimal for two congruent
@@ -110,7 +152,11 @@ def best_nesting_offset(poly_a, poly_b_aligned, usable_w, usable_h, gap_mm, step
     return best
 
 
-def draw_net(ax, path, face_2d, rotate_deg, pivot, ox, oy):
+FOLD_STYLE = dict(color="0.5", linestyle=(0, (4, 3)), linewidth=1.1)
+CUT_STYLE = dict(color="black", linestyle="-", linewidth=1.6)
+
+
+def draw_net(ax, path, face_2d, rotate_deg, pivot, ox, oy, tab_edges=()):
     c, s = math.cos(math.radians(rotate_deg)), math.sin(math.radians(rotate_deg))
     px, py = pivot
 
@@ -123,6 +169,10 @@ def draw_net(ax, path, face_2d, rotate_deg, pivot, ox, oy):
         fa, fb = path[i], path[i + 1]
         shared = [v for v in FACES[fa] if v in FACES[fb]]
         fold_edges.add(edge_key(*shared))
+
+    # edges with a tab attached fold rather than cut -- the paper stays
+    # continuous there, the cut line moves to the tab's own outer edge
+    tab_edge_ids = {edge_key(a, b) for _, a, b in tab_edges}
 
     def pt_of(fi, gv):
         for g, p in face_2d[fi]:
@@ -142,10 +192,15 @@ def draw_net(ax, path, face_2d, rotate_deg, pivot, ox, oy):
                 continue
             drawn.add(eid)
             pa, pb = pt_of(fi, a), pt_of(fi, b)
-            is_fold = eid in fold_edges
-            style = dict(color="0.5", linestyle=(0, (4, 3)), linewidth=1.1) if is_fold \
-                else dict(color="black", linestyle="-", linewidth=1.6)
-            ax.plot([pa[0], pb[0]], [pa[1], pb[1]], **style)
+            is_fold = eid in fold_edges or eid in tab_edge_ids
+            ax.plot([pa[0], pb[0]], [pa[1], pb[1]], **(FOLD_STYLE if is_fold else CUT_STYLE))
+
+    for fi, a, b in tab_edges:
+        tab_pts = [to_page(p) for p in tab_polygon_points(face_2d, fi, a, b)]
+        base1, tip1, tip2, base2 = tab_pts
+        ax.plot([base1[0], tip1[0]], [base1[1], tip1[1]], **CUT_STYLE)
+        ax.plot([tip1[0], tip2[0]], [tip1[1], tip2[1]], **CUT_STYLE)
+        ax.plot([tip2[0], base2[0]], [tip2[1], base2[1]], **CUT_STYLE)
 
 
 if __name__ == "__main__":
@@ -161,9 +216,9 @@ if __name__ == "__main__":
     unit_2ds = [unfold(p, 1.0) for p in paths]
     align_deg = alignment_rotation_deg(paths[0], unit_2ds[0], paths[1], unit_2ds[1])
 
-    poly0 = net_polygon(paths[0], unit_2ds[0])
+    poly0 = net_polygon_with_tabs(0, paths[0], unit_2ds[0])
     cx1, cy1 = centroid(unit_2ds[1], paths[1][0])  # pivot for cap1's rotation
-    poly1_aligned = shapely_rotate(net_polygon(paths[1], unit_2ds[1]), align_deg, origin=(cx1, cy1))
+    poly1_aligned = shapely_rotate(net_polygon_with_tabs(1, paths[1], unit_2ds[1]), align_deg, origin=(cx1, cy1))
 
     best = best_nesting_offset(poly0, poly1_aligned, usable_w, usable_h, CUT_GAP_MM)
     edge_len, off_dx, off_dy = best
@@ -175,10 +230,10 @@ if __name__ == "__main__":
     # Do ALL placement bookkeeping in shapely (rotate/translate/bounds), then
     # hand draw_net just the final (rotation, pivot, offset) each net needs --
     # avoids re-deriving rotated coordinates by hand a second time.
-    poly0 = net_polygon(paths[0], face_2ds[0])  # cap0 stays at its natural, unrotated placement
+    poly0 = net_polygon_with_tabs(0, paths[0], face_2ds[0])  # cap0 stays at its natural, unrotated placement
 
     rot_pivot = centroid(face_2ds[1], paths[1][0])
-    poly1_rotated = shapely_rotate(net_polygon(paths[1], face_2ds[1]), align_deg, origin=rot_pivot)
+    poly1_rotated = shapely_rotate(net_polygon_with_tabs(1, paths[1], face_2ds[1]), align_deg, origin=rot_pivot)
     # slot cap1 (now in cap0's orientation) into its nested position
     slot_x, slot_y = off_dx * edge_len, off_dy * edge_len
     r1minx, r1miny, _, _ = poly1_rotated.bounds
@@ -197,8 +252,8 @@ if __name__ == "__main__":
     ax.set_aspect("equal")
     ax.axis("off")
 
-    draw_net(ax, paths[0], face_2ds[0], 0, (0, 0), center_ox, center_oy)
-    draw_net(ax, paths[1], face_2ds[1], align_deg, rot_pivot, cap1_dx + center_ox, cap1_dy + center_oy)
+    draw_net(ax, paths[0], face_2ds[0], 0, (0, 0), center_ox, center_oy, tab_edges=TAB_EDGES[0])
+    draw_net(ax, paths[1], face_2ds[1], align_deg, rot_pivot, cap1_dx + center_ox, cap1_dy + center_oy, tab_edges=TAB_EDGES[1])
 
     ax.text(PAGE_W_MM / 2, PAGE_H_MM - 15,
              "Hamiltonian Polyhedron - Icosahedron",
