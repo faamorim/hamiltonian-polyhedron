@@ -2,8 +2,10 @@
 wireframe only (no 3D relief), for cutting out of paper/cardboard and
 folding by hand as a cheap side-prototype of the folding geometry.
 
-Solid lines are each strip's outer silhouette (cut here). Dashed lines are
-the internal edges between faces (fold here, mountain-fold so the strip
+Solid lines are each strip's outer silhouette (cut here) -- including the
+handle tabs, which are cut out as part of the strip's outline and are not
+folded, being grips rather than anything the polyhedron needs. Dashed lines
+are the internal edges between faces (fold here, mountain-fold so the strip
 curls toward you the way the printed 3D version will).
 
 Must be printed at 100% / "Actual Size" -- NOT "Fit to page". The edge
@@ -154,6 +156,40 @@ FOLD_STYLE = dict(color="0.5", linestyle=(0, (4, 3)), linewidth=1.1)
 CUT_STYLE = dict(color="black", linestyle="-", linewidth=1.6)
 
 
+def cut_stubs_beside_tab(pa, pb, base1, base2):
+    """The parts of a tabbed edge that are still bare silhouette: the edge
+    minus the stretch the tab's base covers. Returned in traversal order, so
+    it does not matter which way round the edge is handed in."""
+    dx, dy = pb[0] - pa[0], pb[1] - pa[1]
+    span = dx * dx + dy * dy
+
+    def along(q):
+        return ((q[0] - pa[0]) * dx + (q[1] - pa[1]) * dy) / span
+
+    def off_edge(q):
+        t = along(q)
+        return math.dist(q, (pa[0] + t * dx, pa[1] + t * dy))
+
+    lo, hi = sorted([base1, base2], key=along)
+    assert max(off_edge(lo), off_edge(hi)) < 1e-6, "tab base is not on its edge"
+    assert 0 < along(lo) < along(hi) < 1, "tab base runs past the end of its edge"
+    return [(pa, lo), (hi, pb)]
+
+
+def verify_cut_outline_closes(cut_segments):
+    """A cut template is only usable if the solid lines form ONE closed loop
+    the scissors can follow without lifting. Any gap shows up as an endpoint
+    used an odd number of times -- which is exactly what a tab whose base
+    stubs were drawn as folds instead of cuts leaves behind."""
+    ends = {}
+    for seg in cut_segments:
+        for q in seg:
+            key = (round(q[0], 6), round(q[1], 6))
+            ends[key] = ends.get(key, 0) + 1
+    open_ends = [q for q, n in ends.items() if n != 2]
+    assert not open_ends, f"cut outline has {len(open_ends)} loose end(s): {open_ends[:4]}"
+
+
 def draw_net(ax, path, face_2d, rotate_deg, pivot, ox, oy, tab_edges=()):
     c, s = math.cos(math.radians(rotate_deg)), math.sin(math.radians(rotate_deg))
     px, py = pivot
@@ -168,15 +204,24 @@ def draw_net(ax, path, face_2d, rotate_deg, pivot, ox, oy, tab_edges=()):
         shared = [v for v in FACES[fa] if v in FACES[fb]]
         fold_edges.add(edge_key(*shared))
 
-    # edges with a tab attached fold rather than cut -- the paper stays
-    # continuous there, the cut line moves to the tab's own outer edge
-    tab_edge_ids = {edge_key(a, b) for _, a, b in tab_edges}
+    # A tab sits on the MIDDLE stretch of a free edge (TAB_BASE_FRAC of it),
+    # not the whole edge. The stubs either side of it are still plain outer
+    # silhouette and get cut; across the tab's own base nothing is drawn at
+    # all, so the tab flows into the strip as one continuous outline. The
+    # rule the sheet then obeys is exact: a solid line is where the scissors
+    # go and nowhere else, and a dashed line is a fold of the polyhedron --
+    # which the tab base is not, since the tabs are only handles.
+    tab_base_pts = {}
+    for fi, a, b in tab_edges:
+        corners = [to_page(q) for q in tab_polygon_points(face_2d, fi, a, b)]
+        tab_base_pts[edge_key(a, b)] = (corners[0], corners[3])  # base1, base2
 
     def pt_of(fi, gv):
         for g, p in face_2d[fi]:
             if g == gv:
                 return to_page(p)
 
+    cut_segments = []
     drawn = set()  # keyed by edge_id ALONE, so a shared edge is drawn once
     # total, not once per owning face (drawing it twice, from each face's
     # own point order, put the dash pattern out of phase between the two
@@ -190,15 +235,24 @@ def draw_net(ax, path, face_2d, rotate_deg, pivot, ox, oy, tab_edges=()):
                 continue
             drawn.add(eid)
             pa, pb = pt_of(fi, a), pt_of(fi, b)
-            is_fold = eid in fold_edges or eid in tab_edge_ids
-            ax.plot([pa[0], pb[0]], [pa[1], pb[1]], **(FOLD_STYLE if is_fold else CUT_STYLE))
+            if eid in tab_base_pts:
+                for q0, q1 in cut_stubs_beside_tab(pa, pb, *tab_base_pts[eid]):
+                    ax.plot([q0[0], q1[0]], [q0[1], q1[1]], **CUT_STYLE)
+                    cut_segments.append((q0, q1))
+                continue
+            if eid in fold_edges:
+                ax.plot([pa[0], pb[0]], [pa[1], pb[1]], **FOLD_STYLE)
+            else:
+                ax.plot([pa[0], pb[0]], [pa[1], pb[1]], **CUT_STYLE)
+                cut_segments.append((pa, pb))
 
     for fi, a, b in tab_edges:
-        tab_pts = [to_page(p) for p in tab_polygon_points(face_2d, fi, a, b)]
-        base1, tip1, tip2, base2 = tab_pts
-        ax.plot([base1[0], tip1[0]], [base1[1], tip1[1]], **CUT_STYLE)
-        ax.plot([tip1[0], tip2[0]], [tip1[1], tip2[1]], **CUT_STYLE)
-        ax.plot([tip2[0], base2[0]], [tip2[1], base2[1]], **CUT_STYLE)
+        base1, tip1, tip2, base2 = [to_page(p) for p in tab_polygon_points(face_2d, fi, a, b)]
+        for q0, q1 in ((base1, tip1), (tip1, tip2), (tip2, base2)):
+            ax.plot([q0[0], q1[0]], [q0[1], q1[1]], **CUT_STYLE)
+            cut_segments.append((q0, q1))
+
+    verify_cut_outline_closes(cut_segments)
 
 
 if __name__ == "__main__":
@@ -252,6 +306,8 @@ if __name__ == "__main__":
 
     draw_net(ax, paths[0], face_2ds[0], 0, (0, 0), center_ox, center_oy, tab_edges=TAB_EDGES[0])
     draw_net(ax, paths[1], face_2ds[1], align_deg, rot_pivot, cap1_dx + center_ox, cap1_dy + center_oy, tab_edges=TAB_EDGES[1])
+
+    print("both caps cut out as a single closed outline each (verified)")
 
     ax.text(PAGE_W_MM / 2, PAGE_H_MM - 15,
              "Hamiltonian Polyhedron - Icosahedron",
