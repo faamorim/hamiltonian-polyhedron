@@ -82,63 +82,101 @@ def shared_verts(faces, fa, fb):
     return [v for v in faces[fa] if v in faces[fb]]
 
 
-def unfold(faces, path, edge_len):
-    """Roll the strip out flat, face by face. Each face is a regular polygon
-    laid on the far side of the edge it shares with its predecessor, which is
-    the isometric development of the real surface -- lengths and angles within
-    a face are exact, only the fold between faces is opened out.
+def face_shape_2d(solid, fi):
+    """One face laid flat in its own plane, keeping every length and angle.
+    Works for any planar face -- the d10's kites as much as a regular polygon
+    -- because it reads the face's real corners rather than reconstructing an
+    ideal n-gon."""
+    pts = np.array([solid.vertices[i] for i in solid.faces[fi]], float)
+    origin = pts[0]
+    e1 = pts[1] - origin
+    e1 = e1 / np.linalg.norm(e1)
+    n = np.cross(pts[1] - pts[0], pts[2] - pts[0])
+    n = n / np.linalg.norm(n)
+    e2 = np.cross(n, e1)
+    flat = np.array([[(q - origin) @ e1, (q - origin) @ e2] for q in pts])
+    return flat if flat[:, 1].sum() >= 0 else flat * np.array([1.0, -1.0])
 
-    Returns {face_index: [(global_vertex, (x, y)), ...]} in the face's own
-    cyclic vertex order, so the points can be used as a polygon directly.
+
+def _place(shape, ia, ib, pa, pb, away_from):
+    """Drop a face's flat shape onto the page so its shared edge lands on an
+    edge already placed, on the far side from the face it came off. Two rigid
+    placements satisfy the edge; the centroid picks the right one."""
+    la, lb = shape[ia], shape[ib]
+    u, v = shape[ib] - la, np.asarray(pb) - np.asarray(pa)
+    ang = math.atan2(v[1], v[0]) - math.atan2(u[1], u[0])
+    c, s_ = math.cos(ang), math.sin(ang)
+    rot = np.array([[c, -s_], [s_, c]])
+    uh = u / np.linalg.norm(u)
+    mirror = 2 * np.outer(uh, uh) - np.eye(2)
+    best = None
+    for m in (np.eye(2), mirror):
+        out = (shape - la) @ m.T @ rot.T + np.asarray(pa)
+        d = np.linalg.norm(out.mean(0) - np.asarray(away_from))
+        if best is None or d > best[0]:
+            best = (d, out)
+    return best[1]
+
+
+def unfold(solid, path, edge_len):
+    """Roll the strip out flat, face by face -- the isometric development of
+    the real surface. Lengths and angles inside a face are exact; only the
+    fold between faces is opened out.
+
+    `edge_len` is the length the solid's reference edge (the first edge of its
+    first face) comes out at, so it scales the whole net.
+
+    Returns {face: [(global vertex, (x, y)), ...]} in the face's own cyclic
+    order, ready to use as a polygon.
     """
-    n = len(faces[path[0]])
-    assert all(len(faces[f]) == n for f in path), "mixed face sizes in one strip"
-    circumradius = edge_len / (2 * math.sin(math.pi / n))
-    apothem = edge_len / (2 * math.tan(math.pi / n))
+    scale = edge_len / solid.reference_edge()
+    shapes = {fi: face_shape_2d(solid, fi) * scale for fi in path}
 
-    def ngon_from_edge(face, a, b, pa, pb, away_from):
-        """Place `face`'s regular polygon so vertex a sits at pa and b at pb,
-        on the side of that edge away from the point `away_from`."""
-        # Neighbouring faces of a closed surface run their shared edge in
-        # OPPOSITE directions, so a->b may be backwards in this face's cyclic
-        # order. Anchor on whichever end makes it forwards.
-        if face[(face.index(a) + 1) % n] != b:
-            a, b, pa, pb = b, a, pb, pa
-        assert face[(face.index(a) + 1) % n] == b, f"{a}-{b} is not an edge of {face}"
-        pa, pb = np.array(pa), np.array(pb)
-        mid = (pa + pb) / 2
-        d = (pb - pa) / np.linalg.norm(pb - pa)
-        normal = np.array([-d[1], d[0]])
-        if np.dot(normal, mid - np.array(away_from)) < 0:
-            normal = -normal
-        centre = mid + normal * apothem
-        v0 = pa - centre
-        # the turn that carries vertex a to vertex b tells us which way round
-        # this face's cyclic order runs in the plane
-        step = math.atan2(float(np.cross(v0, pb - centre)), float(np.dot(v0, pb - centre)))
-        assert abs(abs(step) - 2 * math.pi / n) < 1e-9, \
-            f"corner turn is {math.degrees(step):.3f} deg, not {360 / n:.3f}"
-        j = face.index(a)
-        placed = []
-        for k in range(n):
-            ang = k * step
-            c, s = math.cos(ang), math.sin(ang)
-            p = centre + np.array([c * v0[0] - s * v0[1], s * v0[0] + c * v0[1]])
-            placed.append((face[(j + k) % n], (float(p[0]), float(p[1]))))
-        assert abs(np.linalg.norm(v0) - circumradius) < 1e-9, "edge length mismatch"
-        return placed
-
-    f0 = faces[path[0]]
-    seed_away = (0.0, -1.0)   # puts the first face on the +y side of its base edge
-    face_2d = {path[0]: ngon_from_edge(f0, f0[0], f0[1], (0.0, 0.0), (edge_len, 0.0), seed_away)}
+    first = solid.faces[path[0]]
+    face_2d = {path[0]: list(zip(first, [tuple(q) for q in shapes[path[0]]]))}
 
     for i in range(1, len(path)):
         fprev, fcur = path[i - 1], path[i]
-        a, b = shared_verts(faces, fprev, fcur)
-        prev_pts = dict(face_2d[fprev])
-        prev_centre = np.mean([p for _, p in face_2d[fprev]], axis=0)
-        face_2d[fcur] = ngon_from_edge(faces[fcur], a, b, prev_pts[a], prev_pts[b], prev_centre)
+        a, b = shared_verts(solid.faces, fprev, fcur)
+        prev = dict(face_2d[fprev])
+        prev_centre = np.mean([q for _, q in face_2d[fprev]], axis=0)
+        cur = solid.faces[fcur]
+        placed = _place(shapes[fcur], cur.index(a), cur.index(b),
+                        prev[a], prev[b], prev_centre)
+        face_2d[fcur] = list(zip(cur, [tuple(q) for q in placed]))
+        for v in (a, b):
+            assert math.dist(prev[v], dict(face_2d[fcur])[v]) < 1e-6, \
+                f"the seam between faces {fprev} and {fcur} does not join"
     return face_2d
+
+
+def net_corners(face_2d, path):
+    return np.array(sorted({(round(q[0], 6), round(q[1], 6))
+                            for fi in path for _, q in face_2d[fi]}))
+
+
+def net_alignment_deg(face_2d_a, path_a, face_2d_b, path_b):
+    """The turn that lands cap B's net on cap A's, found on the flat nets
+    (cheap and exact) rather than guessed from a symmetry of the solid. It has
+    to be searched for: on a solid with irregular faces the angle is not a
+    multiple of anything obvious -- the d10's is 307.885530 degrees."""
+    A, B = net_corners(face_2d_a, path_a), net_corners(face_2d_b, path_b)
+    if len(A) != len(B):
+        return None, np.inf
+    A0, B0 = A - A.mean(0), B - B.mean(0)
+
+    def err(deg):
+        t = math.radians(deg)
+        c, s_ = math.cos(t), math.sin(t)
+        r = B0 @ np.array([[c, s_], [-s_, c]])
+        return max(np.min(np.linalg.norm(A0 - q, axis=1)) for q in r)
+
+    best = min((err(d), d) for d in np.arange(0, 360, 0.5))
+    step = 0.5
+    for _ in range(8):
+        step /= 8
+        best = min((err(d), d) for d in np.arange(best[1] - 4 * step, best[1] + 4 * step, step))
+    return best[1], best[0]
 
 
 def compute_fold_edges(faces, path):
@@ -159,9 +197,41 @@ class Solid:
         for i in range(v):
             a, b = self.cycle[i], self.cycle[(i + 1) % v]
             assert edge_key(a, b) in edges, f"{self.name}: {a}-{b} is not an edge"
-        lengths = {round(float(np.linalg.norm(np.array(self.vertices[a]) - self.vertices[b])), 6)
-                   for a, b in edges}
-        assert len(lengths) == 1, f"{self.name}: faces are not regular, edge lengths {lengths}"
+        for fi, f in enumerate(self.faces):
+            pts = np.array([self.vertices[i] for i in f], float)
+            n = np.cross(pts[1] - pts[0], pts[2] - pts[0])
+            n /= np.linalg.norm(n)
+            off = float(np.abs((pts - pts[0]) @ n).max())
+            assert off < 1e-9, f"{self.name}: face {fi} is not planar (off by {off:.2e})"
+
+    def reference_edge(self):
+        f = self.faces[0]
+        return float(np.linalg.norm(np.array(self.vertices[f[0]]) - self.vertices[f[1]]))
+
+    def face_normals(self):
+        out = []
+        for f in self.faces:
+            pts = np.array([self.vertices[i] for i in f], float)
+            n = np.cross(pts[1] - pts[0], pts[2] - pts[0])
+            n /= np.linalg.norm(n)
+            out.append(n if np.dot(n, pts.mean(0) - self.centre()) > 0 else -n)
+        return np.array(out)
+
+    def centre(self):
+        return np.array(self.vertices, float).mean(0)
+
+    def fold_angles(self):
+        """How far each edge has to close, keyed by edge: the angle between the
+        two faces' outward normals, which is 180 minus the dihedral angle.
+        Read per edge rather than taken as one constant, because a solid need
+        not have only one dihedral -- the d10 has two."""
+        normals = self.face_normals()
+        owners = {}
+        for fi, f in enumerate(self.faces):
+            for e in face_edges(f):
+                owners.setdefault(e, []).append(fi)
+        return {e: math.degrees(math.acos(np.clip(normals[o[0]] @ normals[o[1]], -1, 1)))
+                for e, o in owners.items() if len(o) == 2}
 
     def strips(self):
         """Both caps, each walked end to end as a strip of faces."""
@@ -226,4 +296,67 @@ DODECAHEDRON = Solid(
     [0, 6, 15, 5, 1, 2, 3, 8, 17, 12, 13, 18, 9, 19, 14, 10, 11, 16, 7, 4],
 )
 
-SOLIDS = {"icosahedron": ICOSAHEDRON, "dodecahedron": DODECAHEDRON}
+def _orient(vertices, faces):
+    """Wind every face counter-clockwise seen from outside, so a face's vertex
+    order and its normal agree no matter how the face list was typed in."""
+    centre = np.array(vertices, float).mean(0)
+    out = []
+    for f in faces:
+        pts = np.array([vertices[i] for i in f], float)
+        n = np.cross(pts[1] - pts[0], pts[2] - pts[0])
+        out.append(list(f) if np.dot(n, pts.mean(0) - centre) > 0 else list(f)[::-1])
+    return out
+
+
+_TET_VERTS = [[1, 1, 1], [1, -1, -1], [-1, 1, -1], [-1, -1, 1]]
+_TET_FACES = [[0, 1, 2], [0, 2, 3], [0, 3, 1], [1, 3, 2]]
+
+_CUBE_VERTS = [[-1, -1, -1], [1, -1, -1], [1, 1, -1], [-1, 1, -1],
+               [-1, -1, 1], [1, -1, 1], [1, 1, 1], [-1, 1, 1]]
+_CUBE_FACES = [[0, 1, 2, 3], [4, 5, 6, 7], [0, 1, 5, 4],
+               [3, 2, 6, 7], [0, 3, 7, 4], [1, 2, 6, 5]]
+
+_OCT_VERTS = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]]
+_OCT_FACES = [[0, 2, 4], [2, 1, 4], [1, 3, 4], [3, 0, 4],
+              [2, 0, 5], [1, 2, 5], [3, 1, 5], [0, 3, 5]]
+
+
+def _trapezohedron():
+    """The d10. Not Platonic and not regular: its ten faces are kites, with
+    two different edge lengths and two different dihedral angles. It is here
+    because everything downstream reads each face's real shape and each edge's
+    real fold angle rather than assuming one of each."""
+    a, radius = 0.15, 1.0
+    apex = 9.472135954999583 * a      # makes each kite exactly planar
+    def ring(k, z):
+        ang = math.radians(k * 72 + (36 if z < 0 else 0))
+        return [radius * math.cos(ang), radius * math.sin(ang), z]
+    verts = [[0, 0, apex], [0, 0, -apex]]
+    verts += [ring(k, a) for k in range(5)] + [ring(k, -a) for k in range(5)]
+    upper, lower = (lambda k: 2 + k % 5), (lambda k: 7 + k % 5)
+    faces = [[0, upper(k), lower(k), upper(k + 1)] for k in range(5)]
+    faces += [[1, lower(k), upper(k + 1), lower(k + 1)] for k in range(5)]
+    return verts, faces
+
+
+_TRAP_VERTS, _TRAP_FACES = _trapezohedron()
+
+TETRAHEDRON = Solid("Tetrahedron", _TET_VERTS, _orient(_TET_VERTS, _TET_FACES),
+                    [0, 1, 2, 3])
+CUBE = Solid("Cube", _CUBE_VERTS, _orient(_CUBE_VERTS, _CUBE_FACES),
+             [0, 1, 2, 3, 7, 6, 5, 4])
+OCTAHEDRON = Solid("Octahedron", _OCT_VERTS, _orient(_OCT_VERTS, _OCT_FACES),
+                   [0, 2, 1, 4, 3, 5])
+TRAPEZOHEDRON = Solid("Pentagonal Trapezohedron", _TRAP_VERTS,
+                      _orient(_TRAP_VERTS, _TRAP_FACES),
+                      [0, 2, 7, 3, 8, 4, 9, 5, 10, 1, 11, 6])
+
+# ordered by face count, the way the web visualiser lists them
+SOLIDS = {
+    "tetrahedron": TETRAHEDRON,
+    "cube": CUBE,
+    "octahedron": OCTAHEDRON,
+    "trapezohedron": TRAPEZOHEDRON,
+    "dodecahedron": DODECAHEDRON,
+    "icosahedron": ICOSAHEDRON,
+}

@@ -62,9 +62,12 @@ import math
 import manifold3d as m3d
 import numpy as np
 
-from polyhedra import ICOSAHEDRON, unfold, compute_fold_edges, shared_verts, edge_key
+import sys
 
-SOLID = ICOSAHEDRON
+from polyhedra import (SOLIDS, unfold, compute_fold_edges, shared_verts, edge_key,
+                       net_alignment_deg)
+
+SOLID = SOLIDS[(sys.argv[1] if len(sys.argv) > 1 else "icosahedron").lower()]
 
 # --- scale ----------------------------------------------------------------
 TARGET_EDGE = 22.0          # mm; the ONLY dimension that scales with the model
@@ -88,8 +91,11 @@ TOP_MARGIN = 1.0            # mm, extra inset there at the top -- cosmetic taper
 OVERLAP = 0.3               # mm, frustum foot embedded INTO the base (touching-but-
                             # not-overlapping solids are ambiguous for mesh booleans)
 
-FOLD_ANGLE_DEG = 41.81031489577859   # exact: 180 - the icosahedron's dihedral angle
-FOLD_MITER = math.tan(math.radians(FOLD_ANGLE_DEG) / 2)
+# Each edge closes through its own angle -- 180 minus that edge's dihedral --
+# read off the solid rather than fixed, because a solid need not have only one:
+# the d10's kites meet at 59.45 degrees along one class of edge and 73.30 along
+# the other, and a single constant would mis-cut half its seams.
+FOLD_ANGLES = SOLID.fold_angles()
 
 PIVOT_Z = HINGE_THICKNESS / 2        # the sheet bends about the middle of the thinned band
 FOOT_Z = FACE_THICKNESS - OVERLAP
@@ -100,27 +106,39 @@ assert 0 < HINGE_THICKNESS <= FACE_THICKNESS, "hinge cannot be thicker than the 
 assert 0 < RELIEF_HEIGHT < WALL_HEIGHT, "the relief must end below the top of the wall"
 
 
+def miter_of(edge):
+    return math.tan(math.radians(FOLD_ANGLES[edge]) / 2)
 
-def fold_margin(z):
+
+def foot_margin(miter):
+    """Where the wall's foot sits, and so how wide the bare strip of base is.
+    Normally HINGE_GAP sets it; on a steeply folded solid the miter alone has
+    already pulled the foot back further than that, and then it wins -- asking
+    for a NARROWER strip than the miter demands would put material back where
+    the fold needs air."""
+    return max(HINGE_GAP / 2, CONTACT_CLEARANCE + max(0.0, FOOT_Z - PIVOT_Z) * miter)
+
+
+
+def fold_margin(z, miter):
     """How far the wall face sits from its fold line, at height z above the
     outer skin. Above the relief it is the true miter plane through the pivot,
-    offset by CONTACT_CLEARANCE; below, it is pulled back by enough to leave
-    HINGE_GAP of bare base, ramping away linearly over RELIEF_HEIGHT."""
-    miter = max(0.0, z - PIVOT_Z) * FOLD_MITER
-    pullback = HINGE_GAP / 2 - CONTACT_CLEARANCE - max(0.0, FOOT_Z - PIVOT_Z) * FOLD_MITER
-    assert pullback >= 0, (
-        f"HINGE_GAP of {HINGE_GAP}mm is narrower than the miter already demands at the "
-        f"wall foot; raise HINGE_GAP or lower FACE_THICKNESS")
+    offset by CONTACT_CLEARANCE; below, it is pulled back far enough to leave
+    the hinge bare, ramping away linearly over RELIEF_HEIGHT."""
+    on_plane = CONTACT_CLEARANCE + max(0.0, z - PIVOT_Z) * miter
+    pullback = foot_margin(miter) - (CONTACT_CLEARANCE + max(0.0, FOOT_Z - PIVOT_Z) * miter)
     ramp = max(0.0, 1.0 - (z - FOOT_Z) / RELIEF_HEIGHT)
-    return CONTACT_CLEARANCE + miter + pullback * ramp
+    return on_plane + pullback * ramp
 
 
 # The wall's foot must not overhang the thinned band, or it would be left
-# standing on air where the trench cuts under it. By construction it lands
-# exactly on the trench wall; check it rather than trust it.
-assert abs(fold_margin(FOOT_Z) - HINGE_GAP / 2) < 1e-9, (
-    f"the wall foot sits at {fold_margin(FOOT_Z):.4f}mm but the thinned band "
-    f"reaches {HINGE_GAP / 2:.4f}mm -- the foot would overhang the trench")
+# standing on air where the trench cuts under it. The trench is cut to the
+# foot's own width, so they coincide by construction; check it rather than
+# trust it, for every fold angle this solid actually uses.
+for _a in set(FOLD_ANGLES.values()):
+    _m = math.tan(math.radians(_a) / 2)
+    assert abs(fold_margin(FOOT_Z, _m) - foot_margin(_m)) < 1e-9, \
+        f"the wall foot and the thinned band disagree at a {_a:.2f} deg fold"
 
 
 def free_margin(z):
@@ -128,8 +146,8 @@ def free_margin(z):
     return FREE_EDGE_MARGIN + frac * TOP_MARGIN
 
 
-def margins_at(z, is_fold):
-    return [fold_margin(z) if f else free_margin(z) for f in is_fold]
+def margins_at(z, miters):
+    return [free_margin(z) if m is None else fold_margin(z, m) for m in miters]
 
 
 def offset_polygon_per_edge(pts2d, margins):
@@ -176,11 +194,13 @@ def raised_frustum(pts2d, global_verts, fold_edges):
     with a knee in it. The margin is convex in z (the slope only increases),
     so the convex hull of the three rings is exactly the intended solid."""
     n = len(pts2d)
-    is_fold = [edge_key(global_verts[k], global_verts[(k + 1) % n]) in fold_edges
-               for k in range(n)]
+    miters = []
+    for k in range(n):
+        e = edge_key(global_verts[k], global_verts[(k + 1) % n])
+        miters.append(miter_of(e) if e in fold_edges else None)
     verts = []
     for z in (FOOT_Z, RELIEF_Z, TOP_Z):
-        ring = offset_polygon_per_edge(pts2d, margins_at(z, is_fold))
+        ring = offset_polygon_per_edge(pts2d, margins_at(z, miters))
         assert inradius(ring) > 0.2, (
             f"the wall insets have eaten this face at TARGET_EDGE={TARGET_EDGE}mm "
             f"(top inradius {inradius(ring):.2f}mm) -- the model is too small")
@@ -194,7 +214,7 @@ def ccw(pts):
     return pts if s > 0 else list(reversed(pts))
 
 
-def hinge_trench(pa, pb):
+def hinge_trench(pa, pb, miter):
     """The cut that thins the base along one fold line. It spans exactly the
     bare strip between the two wall feet, so it never undercuts a wall."""
     ax, ay = pa
@@ -203,14 +223,14 @@ def hinge_trench(pa, pb):
     depth = FACE_THICKNESS - HINGE_THICKNESS
     if depth <= 0:
         return None
-    box = m3d.Manifold.cube([length, HINGE_GAP, depth + 1.0], True)
+    box = m3d.Manifold.cube([length, 2 * foot_margin(miter), depth + 1.0], True)
     box = box.rotate([0, 0, math.degrees(math.atan2(by - ay, bx - ax))])
     return box.translate([(ax + bx) / 2, (ay + by) / 2,
                           HINGE_THICKNESS + (depth + 1.0) / 2])
 
 
 def build_strip(path, edge_len=TARGET_EDGE):
-    face_2d = unfold(SOLID.faces, path, edge_len)
+    face_2d = unfold(SOLID, path, edge_len)
     fold_edges = compute_fold_edges(SOLID.faces, path)
 
     # CrossSection needs consistent CCW winding per contour (a CW contour reads
@@ -222,7 +242,7 @@ def build_strip(path, edge_len=TARGET_EDGE):
     for i in range(len(path) - 1):
         a, b = shared_verts(SOLID.faces, path[i], path[i + 1])
         pts = dict(face_2d[path[i]])
-        t = hinge_trench(pts[a], pts[b])
+        t = hinge_trench(pts[a], pts[b], miter_of(edge_key(a, b)))
         if t is not None:
             trenches.append(t)
     if trenches:
@@ -254,39 +274,25 @@ def export_stl(manifold_obj, path_out):
         f.write("endsolid part\n")
 
 
-def stop_angle_deg():
+def stop_angle_deg(miter):
     """The fold angle at which the two contact faces actually meet. The wall
     top is the leading edge once the fold passes the target, so contact is
     where it reaches the mirror plane."""
     lever = TOP_Z - PIVOT_Z
-    return 2 * math.degrees(math.atan((CONTACT_CLEARANCE + lever * FOLD_MITER) / lever))
-
-
-def net_turn(face_2d, path):
-    """Which way this net's first step points -- the reference for lining one
-    cap's net up with the other's."""
-    centre = lambda fi: np.mean([p for _, p in face_2d[fi]], axis=0)
-    d = centre(path[1]) - centre(path[0])
-    return math.degrees(math.atan2(d[1], d[0]))
+    return 2 * math.degrees(math.atan((CONTACT_CLEARANCE + lever * miter) / lever))
 
 
 def congruence_error(a, b, turn_deg):
-    """Volume of b that fails to coincide with a after the best turn about the
-    build plate, trying the net's turn and the icosahedron's 3-fold multiples
-    of it. Zero means the two caps are literally the same object."""
+    """Volume of b that fails to coincide with a after that turn about the
+    build plate. Zero means the two caps are literally the same object."""
     mid = lambda m: ((m.bounding_box()[0] + m.bounding_box()[3]) / 2,
                      (m.bounding_box()[1] + m.bounding_box()[4]) / 2)
     ax, ay = mid(a)
     bx, by = mid(b)
-    best = None
-    for deg in (turn_deg, turn_deg + 120, turn_deg + 240):
-        r = b.translate([-bx, -by, 0]).rotate([0, 0, deg])
-        rx, ry = mid(r)
-        r = r.translate([ax - rx, ay - ry, 0])
-        err = (a - r).volume() + (r - a).volume()
-        if best is None or err < best[0]:
-            best = (err, deg % 360)
-    return best
+    r = b.translate([-bx, -by, 0]).rotate([0, 0, turn_deg])
+    rx, ry = mid(r)
+    r = r.translate([ax - rx, ay - ry, 0])
+    return (a - r).volume() + (r - a).volume()
 
 
 def ray_hits_segment(origin, direction, a, b):
@@ -311,7 +317,7 @@ def measure_wall_profile(solid, face_2d, path, samples=25):
     heights and measures how far the material starts from the fold line --
     sampling the surface itself, not just the few heights that happen to
     carry mesh vertices."""
-    i = len(path) // 2
+    i = min(len(path) // 2, len(path) - 2)     # a 2-face strip has only one seam
     va, vb = shared_verts(SOLID.faces, path[i], path[i + 1])
     pts = dict(face_2d[path[i]])
     pa, pb = np.array(pts[va]), np.array(pts[vb])
@@ -339,10 +345,13 @@ def measure_wall_profile(solid, face_2d, path, samples=25):
 
 if __name__ == "__main__":
     paths = SOLID.strips()
-    print(f"fold angle wanted {FOLD_ANGLE_DEG:.2f} deg; the contact faces meet at "
-          f"{stop_angle_deg():.2f} deg ({stop_angle_deg() - FOLD_ANGLE_DEG:+.2f})")
-    print(f"bare base strip at a fold: {HINGE_GAP:.2f}mm wide, {HINGE_THICKNESS:.2f}mm "
-          f"thick, under {FACE_THICKNESS:.2f}mm faces")
+    print(f"{SOLID.name}: two strips of {len(paths[0])} faces "
+          f"({len(SOLID.faces[paths[0][0]])} sides each)")
+    for angle in sorted(set(FOLD_ANGLES.values())):
+        m = math.tan(math.radians(angle) / 2)
+        print(f"  a {angle:6.2f} deg fold: contact faces meet at {stop_angle_deg(m):6.2f} deg "
+              f"({stop_angle_deg(m) - angle:+.2f}), bare strip {2 * foot_margin(m):.2f}mm wide")
+    print(f"base {FACE_THICKNESS:.2f}mm under the faces, {HINGE_THICKNESS:.2f}mm at the folds")
 
     solids = []
     for i, path in enumerate(paths):
@@ -366,17 +375,26 @@ if __name__ == "__main__":
     print(f"\nboth caps: volume {solids[0][0].volume():.6f} / "
           f"{solids[1][0].volume():.6f}, area {solids[0][0].surface_area():.6f} / "
           f"{solids[1][0].surface_area():.6f}")
-    diff, turn = congruence_error(solids[0][0], solids[1][0], net_turn(*solids[0][1:]) -
-                                  net_turn(*solids[1][1:]))
-    print(f"a {turn:.2f} deg turn leaves {diff:.6f}mm3 of the {solids[0][0].volume():.0f}mm3 "
-          f"solid unmatched -- {'ONE part, printed twice' if diff < 1e-3 else 'NOT congruent'}")
+    turn, net_err = net_alignment_deg(solids[0][1], solids[0][2],
+                                      solids[1][1], solids[1][2])
+    assert turn is not None and net_err < 1e-5, (
+        f"the two nets are not congruent (best fit off by {net_err:.4f}mm) -- "
+        f"this solid needs two different prints")
+    diff = congruence_error(solids[0][0], solids[1][0], turn)
+    print(f"a {turn:.4f} deg turn (found on the nets to {net_err:.1e}mm) leaves "
+          f"{diff:.6f}mm3 of the {solids[0][0].volume():.0f}mm3 solid unmatched -- "
+          f"{'ONE part, printed twice' if diff < 1e-3 else 'NOT congruent'}")
     assert diff < 1e-3, "the two caps are not the same part after all"
 
     solid, face_2d, path = solids[0]
-    worst = max(abs(m - fold_margin(z)) for z, m in
+    i = min(len(path) // 2, len(path) - 2)
+    seam = edge_key(*shared_verts(SOLID.faces, path[i], path[i + 1]))
+    worst = max(abs(m - fold_margin(z, miter_of(seam))) for z, m in
                 measure_wall_profile(solid, face_2d, path) if z > RELIEF_Z + 0.2)
     print(f"wall face measured off the finished mesh matches the design to {worst:.4f}mm")
     assert worst < 0.05, "the printed wall is not where the design says it is"
 
-    export_stl(solid, "hardware/tests/flat_strip.stl")
-    print("\nwrote hardware/tests/flat_strip.stl  (print TWO of these)")
+    name = SOLID.name.split()[-1].lower()
+    out = f"hardware/tests/flat_strip_{name}.stl"
+    export_stl(solid, out)
+    print(f"\nwrote {out}  (print TWO of these)")

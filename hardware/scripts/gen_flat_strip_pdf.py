@@ -53,7 +53,7 @@ from shapely.geometry import Polygon
 from shapely.affinity import rotate as shapely_rotate, translate as shapely_translate
 from shapely.ops import unary_union
 
-from polyhedra import SOLIDS, unfold, compute_fold_edges, edge_key
+from polyhedra import SOLIDS, unfold, compute_fold_edges, edge_key, net_alignment_deg
 
 # Landscape US Letter -- swap for (297, 210) for landscape A4.
 PAGE_W_MM, PAGE_H_MM = 279.4, 215.9
@@ -73,19 +73,6 @@ def net_bbox(path, face_2d):
 def centroid(face_2d, fi):
     pts = [p for _, p in face_2d[fi]]
     return (sum(p[0] for p in pts) / len(pts), sum(p[1] for p in pts) / len(pts))
-
-
-def alignment_rotation_deg(path_a, face_2d_a, path_b, face_2d_b):
-    """The angle to rotate net B's points by so it lands in the same
-    orientation as net A (only meaningful/exact if the two nets are
-    congruent -- verified true for cap0/cap1 by the zero-error check this
-    reproduces the logic of)."""
-    def step(path, face_2d, i):
-        ca, cb = centroid(face_2d, path[i]), centroid(face_2d, path[i + 1])
-        return (cb[0] - ca[0], cb[1] - ca[1])
-
-    sa, sb = step(path_a, face_2d_a, 0), step(path_b, face_2d_b, 0)
-    return math.degrees(math.atan2(sa[1], sa[0]) - math.atan2(sb[1], sb[0]))
 
 
 def net_polygon(path, face_2d):
@@ -290,9 +277,12 @@ if __name__ == "__main__":
 
     # search for the tightest nesting at unit (1mm edge) scale, then solve
     # for the actual edge length once
-    unit_2ds = [unfold(solid.faces, p, 1.0) for p in paths]
+    unit_2ds = [unfold(solid, p, 1.0) for p in paths]
     tabs = [pick_tab_edges(solid, paths[i], unit_2ds[i]) for i in (0, 1)]
-    align_deg = alignment_rotation_deg(paths[0], unit_2ds[0], paths[1], unit_2ds[1])
+    align_deg, align_err = net_alignment_deg(unit_2ds[0], paths[0], unit_2ds[1], paths[1])
+    assert align_deg is not None and align_err < 1e-5, (
+        f"the two nets are not congruent (best fit off by {align_err:.4f} edge lengths) -- "
+        f"nesting two copies of one shape does not apply to this solid")
 
     poly0 = net_polygon_with_tabs(paths[0], unit_2ds[0], tabs[0])
     cx1, cy1 = centroid(unit_2ds[1], paths[1][0])  # pivot for cap1's rotation
@@ -305,7 +295,7 @@ if __name__ == "__main__":
     print(f"alignment rotation for cap1: {align_deg:.2f} deg")
     print(f"using edge length {edge_len:.1f}mm (nested fit, {PAGE_W_MM:.0f}x{PAGE_H_MM:.0f}mm landscape)")
 
-    face_2ds = [unfold(solid.faces, p, edge_len) for p in paths]
+    face_2ds = [unfold(solid, p, edge_len) for p in paths]
 
     # Do ALL placement bookkeeping in shapely (rotate/translate/bounds), then
     # hand draw_net just the final (rotation, pivot, offset) each net needs --

@@ -16,7 +16,7 @@ import numpy as np
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
 import gen_flat_strip as G
-from polyhedra import shared_verts
+from polyhedra import shared_verts, edge_key
 
 BG = "#f7f7f5"
 
@@ -92,8 +92,9 @@ if __name__ == "__main__":
                  fontsize=9, color="0.25", pad=0)
 
     # --- cross-section through one fold line -----------------------------
-    i = len(path) // 2
+    i = min(len(path) // 2, len(path) - 2)
     va, vb = shared_verts(G.SOLID.faces, path[i], path[i + 1])
+    miter = G.miter_of(edge_key(va, vb))
     pts = dict(face_2d[path[i]])
     pa, pb = np.array(pts[va]), np.array(pts[vb])
     mid = (pa + pb) / 2
@@ -129,7 +130,7 @@ if __name__ == "__main__":
     # where the two walls will meet once folded
     for sign in (+1, -1):
         zc = np.linspace(G.RELIEF_Z, G.TOP_Z, 2)
-        ax.plot(sign * (G.CONTACT_CLEARANCE + (zc - G.PIVOT_Z) * G.FOLD_MITER), zc,
+        ax.plot(sign * (G.CONTACT_CLEARANCE + (zc - G.PIVOT_Z) * miter), zc,
                 color="#c0392b", lw=1.4)
     ax.plot([], [], color="#c0392b", lw=1.4, label="contact face (true miter)")
     ax.legend(loc="upper center", fontsize=7, frameon=False)
@@ -143,8 +144,10 @@ if __name__ == "__main__":
         sp.set_color("0.8")
     ax.tick_params(labelsize=7, colors="0.5")
 
-    fig.suptitle(f"Hamiltonian Polyhedron - icosahedron cap strip, {G.TARGET_EDGE:.0f}mm edges",
+    fig.suptitle(f"Hamiltonian Polyhedron - {G.SOLID.name.lower()} cap strip, "
+                 f"{G.TARGET_EDGE:.0f}mm edges",
                  fontsize=11, color="0.2")
     fig.tight_layout(rect=[0, 0, 1, 0.95])
-    fig.savefig("hardware/tests/strip_render.png", dpi=150, facecolor=BG)
-    print("wrote hardware/tests/strip_render.png")
+    out = f"hardware/tests/strip_render_{G.SOLID.name.split()[-1].lower()}.png"
+    fig.savefig(out, dpi=150, facecolor=BG)
+    print(f"wrote {out}")
