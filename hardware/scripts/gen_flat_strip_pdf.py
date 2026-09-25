@@ -100,34 +100,62 @@ TAB_TOP_FRAC = 0.40    # width at the outer tip
 TAB_HEIGHT_FRAC = 0.45  # how far the tab protrudes, as a fraction of the edge length
 
 
-def pick_tab_edges(solid, path, face_2d):
-    """One tab at each END of the strip, so a cap is held from both of its
-    extremities rather than from two adjacent points. Of an end face's free
-    edges, the tab goes on the one NEAREST the strip's own centre, which
-    tucks it alongside the body of the net rather than flaring it off the
-    far tip -- both easier to grip and tighter to nest on the page.
-
-    Measuring against the strip's centre rather than against the adjoining
-    face is not a stylistic choice: an end face is symmetric about the fold
-    edge that joins it to the strip, so its free edges are exactly
-    equidistant from that neighbour and a rule phrased that way is a tie
-    decided by nothing. Against the strip's centre the two differ clearly
-    (1.73 vs 2.18 edge lengths on the icosahedron), and picking the nearer
-    reproduces all four tab positions that were placed by hand there.
-    """
+def end_free_edges(solid, path):
+    """Each end face's free edges -- the seam edges a tab could sit on if it is
+    to be at the end of the strip."""
     folds = compute_fold_edges(solid.faces, path)
-    strip_centre = np.mean([q for f in path for _, q in face_2d[f]], axis=0)
-    chosen = []
+    out = []
     for end in (path[0], path[-1]):
-        pts = dict(face_2d[end])
-        face = solid.faces[end]
-        free = [(face[k], face[(k + 1) % len(face)]) for k in range(len(face))
-                if edge_key(face[k], face[(k + 1) % len(face)]) not in folds]
-        assert free, f"face {end} has no free edge to put a tab on"
-        a, b = min(free, key=lambda ab: np.linalg.norm(
-            (np.array(pts[ab[0]]) + np.array(pts[ab[1]])) / 2 - strip_centre))
-        chosen.append((end, a, b))
-    return chosen
+        f = solid.faces[end]
+        out.append((end, [(f[k], f[(k + 1) % len(f)]) for k in range(len(f))
+                          if edge_key(f[k], f[(k + 1) % len(f)]) not in folds]))
+    return out
+
+
+def pick_tab_edges(solid, paths, face_2ds):
+    """Two tabs per strip, one at each end, and -- the part that matters -- the
+    tab on cap A and the tab on cap B at a matching end sit on the SAME seam
+    edge. Every free edge of a cap's net is an edge of the Hamiltonian cycle,
+    and each cycle edge appears once on each cap's rim, so a pair chosen this
+    way ends up side by side on one edge of the assembled solid and can be
+    pinched together. That is the whole point of the tabs.
+
+    Choosing each cap's tabs independently does not give it. Picking by
+    geometry alone, the two caps disagree about which seam edge to use and the
+    tabs land on opposite sides of the finished solid: it happened to come out
+    right on the icosahedron, half right on the d10 and the tetrahedron, and
+    wrong on both tabs of the cube.
+    """
+    ends = [end_free_edges(solid, p) for p in paths]
+    centre = np.mean([q for f in paths[0] for _, q in face_2ds[0][f]], axis=0)
+
+    for order in ((0, 1), (1, 0)):
+        chosen = []
+        for ai, bi in enumerate(order):
+            end_a, free_a = ends[0][ai]
+            end_b, free_b = ends[1][bi]
+            common = {edge_key(*e) for e in free_a} & {edge_key(*e) for e in free_b}
+            if not common:
+                chosen = None
+                break
+            pts = dict(face_2ds[0][end_a])
+            # tie-break as before: nearest the body of the strip, which is
+            # where a hand grips, and which reproduces the icosahedron's
+            # tab positions that were placed by hand
+            pick = min((e for e in free_a if edge_key(*e) in common),
+                       key=lambda ab: np.linalg.norm(
+                           (np.array(pts[ab[0]]) + np.array(pts[ab[1]])) / 2 - centre))
+            mate = next(e for e in free_b if edge_key(*e) == edge_key(*pick))
+            chosen.append(((end_a,) + pick, (end_b,) + mate))
+        if chosen:
+            tabs = [[c[0] for c in chosen], [c[1] for c in chosen]]
+            assert ({edge_key(a, b) for _, a, b in tabs[0]} ==
+                    {edge_key(a, b) for _, a, b in tabs[1]}), "tabs do not pair up"
+            return tabs
+
+    raise AssertionError(
+        f"{solid.name}: no two seam edges sit at the end of both strips, so the "
+        f"tabs cannot be made to meet on the assembled solid")
 
 
 def tab_polygon_points(face_2d, fi, a, b):
@@ -278,7 +306,7 @@ if __name__ == "__main__":
     # search for the tightest nesting at unit (1mm edge) scale, then solve
     # for the actual edge length once
     unit_2ds = [unfold(solid, p, 1.0) for p in paths]
-    tabs = [pick_tab_edges(solid, paths[i], unit_2ds[i]) for i in (0, 1)]
+    tabs = pick_tab_edges(solid, paths, unit_2ds)
     align_deg, align_err = net_alignment_deg(unit_2ds[0], paths[0], unit_2ds[1], paths[1])
     assert align_deg is not None and align_err < 1e-5, (
         f"the two nets are not congruent (best fit off by {align_err:.4f} edge lengths) -- "
@@ -288,6 +316,9 @@ if __name__ == "__main__":
     cx1, cy1 = centroid(unit_2ds[1], paths[1][0])  # pivot for cap1's rotation
     poly1_aligned = shapely_rotate(
         net_polygon_with_tabs(paths[1], unit_2ds[1], tabs[1]), align_deg, origin=(cx1, cy1))
+
+    print("tab pairs (each sits on one seam edge, one tab from each cap): "
+          + ", ".join(f"{a}-{b}" for _, a, b in tabs[0]))
 
     best = best_nesting_offset(poly0, poly1_aligned, usable_w, usable_h, CUT_GAP_MM)
     assert best is not None, "no nesting of the two strips fits on the page"

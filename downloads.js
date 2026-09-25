@@ -12,8 +12,8 @@ window.DOWNLOADS = [
     ],
     "net": {
       "path": "hardware/tests/flat_strip_template_tetrahedron.pdf",
-      "edge": 94.7,
-      "gap": 3.13
+      "edge": 99.8,
+      "gap": 7.84
     },
     "stl": {
       "path": "hardware/tests/flat_strip_tetrahedron.stl",
@@ -34,8 +34,8 @@ window.DOWNLOADS = [
     ],
     "net": {
       "path": "hardware/tests/flat_strip_template_cube.pdf",
-      "edge": 52.4,
-      "gap": 5.24
+      "edge": 61.3,
+      "gap": 3.07
     },
     "stl": {
       "path": "hardware/tests/flat_strip_cube.stl",
@@ -79,8 +79,8 @@ window.DOWNLOADS = [
     ],
     "net": {
       "path": "hardware/tests/flat_strip_template_trapezohedron.pdf",
-      "edge": 65.8,
-      "gap": 7.27
+      "edge": 68.3,
+      "gap": 3.61
     },
     "stl": {
       "path": "hardware/tests/flat_strip_trapezohedron.stl",
