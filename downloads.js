@@ -12,8 +12,8 @@ window.DOWNLOADS = [
     ],
     "net": {
       "path": "hardware/tests/flat_strip_template_tetrahedron.pdf",
-      "edge": 112.8,
-      "gap": 3.08
+      "edge": 85.4,
+      "gap": 4.07
     },
     "stl": {
       "path": "hardware/tests/flat_strip_tetrahedron.stl",
@@ -34,8 +34,8 @@ window.DOWNLOADS = [
     ],
     "net": {
       "path": "hardware/tests/flat_strip_template_cube.pdf",
-      "edge": 70.1,
-      "gap": 5.95
+      "edge": 51.9,
+      "gap": 4.62
     },
     "stl": {
       "path": "hardware/tests/flat_strip_cube.stl",
@@ -56,8 +56,8 @@ window.DOWNLOADS = [
     ],
     "net": {
       "path": "hardware/tests/flat_strip_template_octahedron.pdf",
-      "edge": 83.7,
-      "gap": 3.46
+      "edge": 66.2,
+      "gap": 5.05
     },
     "stl": {
       "path": "hardware/tests/flat_strip_octahedron.stl",
@@ -74,18 +74,18 @@ window.DOWNLOADS = [
     "sides": 4,
     "strip": 5,
     "foldAngles": [
-      59.45,
-      73.3
+      51.83,
+      90.0
     ],
     "net": {
       "path": "hardware/tests/flat_strip_template_trapezohedron.pdf",
-      "edge": 75.4,
-      "gap": 4.66
+      "edge": 58.7,
+      "gap": 3.69
     },
     "stl": {
       "path": "hardware/tests/flat_strip_trapezohedron.stl",
       "edge": 22.0,
-      "turn": 307.8855
+      "turn": 335.4819
     },
     "extras": []
   },
@@ -101,8 +101,8 @@ window.DOWNLOADS = [
     ],
     "net": {
       "path": "hardware/tests/flat_strip_template_dodecahedron.pdf",
-      "edge": 29.7,
-      "gap": 3.73
+      "edge": 29.5,
+      "gap": 3.6
     },
     "stl": {
       "path": "hardware/tests/flat_strip_dodecahedron.stl",

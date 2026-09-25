@@ -62,6 +62,15 @@ MARGIN_MM = 10    # safe margin on all sides (most printers can't print edge-to-
 HEADER_MM = 15    # vertical space reserved for the title at the top
 CUT_GAP_MM = 3.0  # minimum real clearance wanted between the two cut outlines
 
+# Every solid is drawn at whatever edge length gives it this mean width -- the
+# average caliper measurement over all orientations -- so the finished models
+# look the same size sitting next to each other. Matching bounding spheres
+# instead would make the spiky ones look small (most of the sphere is void);
+# matching volume would make them look huge. Mean width is the measure between,
+# and it is what a hand judges. The figure is the icosahedron at 44.7mm edges,
+# which is what fits its page.
+TARGET_MEAN_WIDTH_MM = 77.87
+
 
 def net_bbox(path, face_2d):
     pts = [p for fi in path for _, p in face_2d[fi]]
@@ -198,7 +207,8 @@ def net_polygon_with_tabs(path, face_2d, tab_edges, mm=1.0):
     return poly
 
 
-def best_nesting_offset(poly_a, poly_b_aligned, usable_w, usable_h, gap_mm, step=0.1):
+def best_nesting_offset(poly_a, poly_b_aligned, usable_w, usable_h, gap_mm,
+                       step=0.1, at_edge=None):
     """poly_b_aligned is already in the same orientation as poly_a (0 deg
     relative rotation, established separately as optimal for two congruent
     copies of this shape). Slide it around on a grid and keep the
@@ -220,7 +230,9 @@ def best_nesting_offset(poly_a, poly_b_aligned, usable_w, usable_h, gap_mm, step
             if cw <= 0 or ch <= 0:
                 continue
             e_pagefit = min(usable_w / cw, usable_h / ch)
-            if gap_mm / d_unit > e_pagefit:
+            # the clearance has to hold at the size actually drawn, which is
+            # not the page-fit size once a solid is deliberately drawn smaller
+            if gap_mm / d_unit > (at_edge if at_edge is not None else e_pagefit):
                 continue
             if best is None or e_pagefit > best[0]:
                 best = (e_pagefit, dx, dy)
@@ -348,8 +360,24 @@ if __name__ == "__main__":
         edge_len = (edge_len + best[0]) / 2      # damped, so it cannot oscillate
     else:
         raise AssertionError("the page fit did not settle")
-    edge_len, off_dx, off_dy = best
+    page_limit = best[0]
+
+    # the size we WANT, from the shared mean-width target; the page may not
+    # allow it, and then the page wins and we say so
+    wanted = TARGET_MEAN_WIDTH_MM / solid.mean_width()
+    edge_len = min(wanted, page_limit)
     mm = 1.0 / edge_len
+    poly0 = net_polygon_with_tabs(paths[0], unit_2ds[0], tabs[0], mm)
+    poly1_aligned = shapely_rotate(
+        net_polygon_with_tabs(paths[1], unit_2ds[1], tabs[1], mm), align_deg, origin=(cx1, cy1))
+    best = best_nesting_offset(poly0, poly1_aligned, usable_w, usable_h, CUT_GAP_MM,
+                               at_edge=edge_len)
+    assert best is not None, f"the two strips do not nest at {edge_len:.1f}mm edges"
+    _, off_dx, off_dy = best
+
+    print(f"mean width {TARGET_MEAN_WIDTH_MM:.2f}mm wants {wanted:.1f}mm edges; "
+          f"the page allows up to {page_limit:.1f}mm"
+          + ("" if wanted <= page_limit else "  <- CAPPED BY THE PAGE"))
 
     print(f"alignment rotation for cap1: {align_deg:.2f} deg")
     print(f"using edge length {edge_len:.1f}mm (nested fit, {PAGE_W_MM:.0f}x{PAGE_H_MM:.0f}mm landscape)")

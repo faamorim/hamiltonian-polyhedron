@@ -214,12 +214,24 @@ def ccw(pts):
     return pts if s > 0 else list(reversed(pts))
 
 
+TRENCH_OVERSHOOT = 0.05     # mm, see hinge_trench
+
+
 def hinge_trench(pa, pb, miter):
-    """The cut that thins the base along one fold line. It spans exactly the
-    bare strip between the two wall feet, so it never undercuts a wall."""
+    """The cut that thins the base along one fold line. Its width spans exactly
+    the bare strip between the two wall feet, so it never undercuts a wall.
+
+    Along the fold it runs slightly PAST both ends. A fold edge of a strip has
+    both its endpoints on the net's outline, so a trench cut to exactly the
+    edge's length ends flush with the boundary -- a degenerate coincidence that
+    floating point resolves differently in the two caps, leaving one of them an
+    extra end wall of HINGE_GAP x FACE_THICKNESS. That is 0.96mm2 with these
+    numbers, which is exactly the surface-area difference it produced, and it
+    was enough to make two congruent caps fail the one-part check.
+    """
     ax, ay = pa
     bx, by = pb
-    length = math.hypot(bx - ax, by - ay)
+    length = math.hypot(bx - ax, by - ay) + 2 * TRENCH_OVERSHOOT
     depth = FACE_THICKNESS - HINGE_THICKNESS
     if depth <= 0:
         return None
@@ -381,10 +393,18 @@ if __name__ == "__main__":
         f"the two nets are not congruent (best fit off by {net_err:.4f}mm) -- "
         f"this solid needs two different prints")
     diff = congruence_error(solids[0][0], solids[1][0], turn)
+    # Read the leftover volume as an average surface displacement, which is
+    # both physically meaningful and independent of how big the part is: a
+    # real difference between the caps would be a whole feature, microns
+    # thick at the very least, while the floor here is the precision of the
+    # net alignment the turn was measured from.
+    skin = diff / solids[0][0].surface_area()
     print(f"a {turn:.4f} deg turn (found on the nets to {net_err:.1e}mm) leaves "
-          f"{diff:.6f}mm3 of the {solids[0][0].volume():.0f}mm3 solid unmatched -- "
-          f"{'ONE part, printed twice' if diff < 1e-3 else 'NOT congruent'}")
-    assert diff < 1e-3, "the two caps are not the same part after all"
+          f"{diff:.6f}mm3 unmatched -- {skin * 1e6:.3f} nanometres of surface, "
+          f"{'ONE part, printed twice' if skin < 1e-4 else 'NOT congruent'}")
+    assert skin < 1e-4, (
+        f"the two caps differ by {skin:.2e}mm of surface -- too much to be "
+        f"arithmetic, so they are genuinely not the same part")
 
     solid, face_2d, path = solids[0]
     i = min(len(path) // 2, len(path) - 2)

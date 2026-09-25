@@ -219,7 +219,13 @@
       // zig-zag equatorial ring of ten 3-valent vertices, sized so
       // each kite face (apex, ring, ring, ring) is planar.
       vertices: (function(){
-        var a = 0.15, R = 1, h = 9.472135954999583 * a;
+        // Keeping every kite planar forces h = (5 + 2*sqrt(5)) * a for any a,
+        // leaving one shape parameter. It is set so all twelve vertices land on
+        // one sphere, as the other solids' do -- which also makes this the
+        // least spiky the d10 can be, and puts its height within 0.6% of its
+        // width. Must match hardware/scripts/polyhedra.py.
+        var K = 5 + 2 * Math.sqrt(5);
+        var a = 1 / Math.sqrt(K * K - 1), R = 1, h = K * a;
         var deg = Math.PI / 180;
         function ring(k, z){
           var ang = k * 72 * deg + (z < 0 ? 36 * deg : 0);

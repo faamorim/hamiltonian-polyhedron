@@ -233,6 +233,17 @@ class Solid:
         return {e: math.degrees(math.acos(np.clip(normals[o[0]] @ normals[o[1]], -1, 1)))
                 for e, o in owners.items() if len(o) == 2}
 
+    def mean_width(self):
+        """Average caliper measurement over every orientation, per unit of the
+        reference edge -- the most defensible reading of how big a convex solid
+        looks, and the one that is neither fooled by spikes (as a bounding
+        sphere is) nor by how efficiently the shape fills space (as volume is).
+        For a polytope it is the edge lengths weighted by exterior angles."""
+        verts = np.array(self.vertices, float) / self.reference_edge()
+        folds = self.fold_angles()
+        return sum(float(np.linalg.norm(verts[a] - verts[b])) * math.radians(ang)
+                   for (a, b), ang in folds.items()) / (4 * math.pi)
+
     def strips(self):
         """Both caps, each walked end to end as a strip of faces."""
         adj = internal_adjacency(self.faces, self.cycle)
@@ -325,9 +336,25 @@ def _trapezohedron():
     """The d10. Not Platonic and not regular: its ten faces are kites, with
     two different edge lengths and two different dihedral angles. It is here
     because everything downstream reads each face's real shape and each edge's
-    real fold angle rather than assuming one of each."""
-    a, radius = 0.15, 1.0
-    apex = 9.472135954999583 * a      # makes each kite exactly planar
+    real fold angle rather than assuming one of each.
+
+    Alone among these solids its proportions are a choice, since the equatorial
+    radius and the height are independent. Not entirely free, though: keeping
+    every kite planar forces the apex height to h = (5 + 2*sqrt(5)) * a for
+    ANY ring height a, which leaves exactly one shape parameter, a/R. Push it
+    down and the solid flattens to a disc; push it up and it becomes a spike.
+
+    It is set here so all twelve vertices land on one sphere, a = 1/sqrt(44 +
+    20*sqrt(5)), which is what every other solid here does by construction.
+    Two things fall out rather than being asked for: it is also the value that
+    maximises mean width against the bounding sphere (0.887, against 0.716 at
+    the old a = 0.15 -- spikier than the tetrahedron's 0.745), and it puts the
+    height within 0.6% of the width.
+    """
+    radius = 1.0
+    ratio = 5 + 2 * math.sqrt(5)          # h/a, forced by keeping the kites planar
+    a = 1 / math.sqrt(ratio ** 2 - 1)     # ... and then every vertex on one sphere
+    apex = ratio * a
     def ring(k, z):
         ang = math.radians(k * 72 + (36 if z < 0 else 0))
         return [radius * math.cos(ang), radius * math.sin(ang), z]
