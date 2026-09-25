@@ -26,8 +26,10 @@ each, and were necessarily bad at both:
     when the wall TOPS jammed, about 13 degrees past the target, leaving the
     gap at the base that showed up on the first print. Now HINGE_GAP sets
     the bare strip and CONTACT_CLEARANCE sets the contact face, and the
-    pull-back ramps away over RELIEF_HEIGHT so the wall returns to the true
-    miter plane for the rest of its height.
+    wall takes whichever of the two is WIDER at each height, so it returns to
+    the true miter plane as soon as the hinge no longer needs the room -- and
+    so that no part of the section can ever reach the mirror plane before the
+    wall top does.
 
   * BASE_THICKNESS set both the flexibility of the hinge AND the stiffness
     of the face skin. Thin enough to fold meant floppy faces, and the
@@ -80,7 +82,6 @@ HINGE_GAP = 0.8             # mm, width of that bare strip (wall foot to wall fo
 
 # --- walls: bending relief and contact face, separately -------------------
 WALL_HEIGHT = 3.0           # mm, rim height above the face
-RELIEF_HEIGHT = 1.2         # mm, height over which the foot's pull-back ramps away
 CONTACT_CLEARANCE = 0.08    # mm, how far the contact face sits off the true miter.
                             # Not zero: a wall printing proud would stop the fold
                             # BEFORE the target angle, which is a hard stop you
@@ -100,45 +101,57 @@ FOLD_ANGLES = SOLID.fold_angles()
 PIVOT_Z = HINGE_THICKNESS / 2        # the sheet bends about the middle of the thinned band
 FOOT_Z = FACE_THICKNESS - OVERLAP
 TOP_Z = FACE_THICKNESS + WALL_HEIGHT
-RELIEF_Z = FACE_THICKNESS + RELIEF_HEIGHT
 
 assert 0 < HINGE_THICKNESS <= FACE_THICKNESS, "hinge cannot be thicker than the face"
-assert 0 < RELIEF_HEIGHT < WALL_HEIGHT, "the relief must end below the top of the wall"
 
 
 def miter_of(edge):
     return math.tan(math.radians(FOLD_ANGLES[edge]) / 2)
 
 
-def foot_margin(miter):
-    """Where the wall's foot sits, and so how wide the bare strip of base is.
-    Normally HINGE_GAP sets it; on a steeply folded solid the miter alone has
-    already pulled the foot back further than that, and then it wins -- asking
-    for a NARROWER strip than the miter demands would put material back where
-    the fold needs air."""
-    return max(HINGE_GAP / 2, CONTACT_CLEARANCE + max(0.0, FOOT_Z - PIVOT_Z) * miter)
+def wall_margin(z, miter):
+    """How far the material sits from its fold line at height z above the outer
+    skin -- for the wall and for the trench cut into the base alike.
+
+    It is the true miter plane through the pivot, offset by CONTACT_CLEARANCE,
+    except low down where that plane would run inside the bare strip the base
+    needs in order to flex; there the bare strip wins.
+
+    Taking the LARGER of the two rather than ramping between them is what keeps
+    the fold honest. The boundary is then never inside the miter plane at any
+    height, and since a point at (d, z) reaches the mirror plane at half-angle
+    atan(d / (z - pivot)), which falls as z rises along the miter, the wall top
+    is guaranteed to be the first thing to touch. That is the contact face, by
+    design. Anything that dips inside the miter plane lower down would touch
+    sooner and jam the fold short of the angle the solid needs.
+    """
+    return max(HINGE_GAP / 2, CONTACT_CLEARANCE + max(0.0, z - PIVOT_Z) * miter)
+
+
+def relief_knee(miter):
+    """Height at which the bare strip stops being the wider of the two and the
+    wall rejoins the miter plane. Only a reporting/ring-placement convenience;
+    nothing depends on it being a parameter any more."""
+    z = PIVOT_Z + (HINGE_GAP / 2 - CONTACT_CLEARANCE) / miter
+    return min(max(z, FOOT_Z), TOP_Z)
 
 
 
-def fold_margin(z, miter):
-    """How far the wall face sits from its fold line, at height z above the
-    outer skin. Above the relief it is the true miter plane through the pivot,
-    offset by CONTACT_CLEARANCE; below, it is pulled back far enough to leave
-    the hinge bare, ramping away linearly over RELIEF_HEIGHT."""
-    on_plane = CONTACT_CLEARANCE + max(0.0, z - PIVOT_Z) * miter
-    pullback = foot_margin(miter) - (CONTACT_CLEARANCE + max(0.0, FOOT_Z - PIVOT_Z) * miter)
-    ramp = max(0.0, 1.0 - (z - FOOT_Z) / RELIEF_HEIGHT)
-    return on_plane + pullback * ramp
 
 
-# The wall's foot must not overhang the thinned band, or it would be left
-# standing on air where the trench cuts under it. The trench is cut to the
-# foot's own width, so they coincide by construction; check it rather than
-# trust it, for every fold angle this solid actually uses.
+# Nothing anywhere on the section may reach the mirror plane before the wall
+# top does, or the fold jams short of the angle the solid needs. Check it for
+# every fold angle this solid uses, across the whole height.
 for _a in set(FOLD_ANGLES.values()):
     _m = math.tan(math.radians(_a) / 2)
-    assert abs(fold_margin(FOOT_Z, _m) - foot_margin(_m)) < 1e-9, \
-        f"the wall foot and the thinned band disagree at a {_a:.2f} deg fold"
+    _psi = lambda z: math.atan2(wall_margin(z, _m), z - PIVOT_Z)
+    _top = _psi(TOP_Z)
+    for _z in [HINGE_THICKNESS + 1e-9] + [HINGE_THICKNESS + k * (TOP_Z - HINGE_THICKNESS) / 400
+                                          for k in range(401)]:
+        assert _psi(_z) >= _top - 1e-12, (
+            f"at a {_a:.2f} deg fold, the section at z={_z:.3f}mm would touch at "
+            f"{2 * math.degrees(_psi(_z)):.2f} deg, before the wall top's "
+            f"{2 * math.degrees(_top):.2f} deg -- the fold would jam early")
 
 
 def free_margin(z):
@@ -147,7 +160,7 @@ def free_margin(z):
 
 
 def margins_at(z, miters):
-    return [free_margin(z) if m is None else fold_margin(z, m) for m in miters]
+    return [free_margin(z) if m is None else wall_margin(z, m) for m in miters]
 
 
 def offset_polygon_per_edge(pts2d, margins):
@@ -198,8 +211,9 @@ def raised_frustum(pts2d, global_verts, fold_edges):
     for k in range(n):
         e = edge_key(global_verts[k], global_verts[(k + 1) % n])
         miters.append(miter_of(e) if e in fold_edges else None)
+    knees = sorted({relief_knee(m) for m in miters if m is not None} or {FOOT_Z})
     verts = []
-    for z in (FOOT_Z, RELIEF_Z, TOP_Z):
+    for z in [FOOT_Z] + knees + [TOP_Z]:
         ring = offset_polygon_per_edge(pts2d, margins_at(z, miters))
         assert inradius(ring) > 0.2, (
             f"the wall insets have eaten this face at TARGET_EDGE={TARGET_EDGE}mm "
@@ -235,7 +249,10 @@ def hinge_trench(pa, pb, miter):
     depth = FACE_THICKNESS - HINGE_THICKNESS
     if depth <= 0:
         return None
-    box = m3d.Manifold.cube([length, 2 * foot_margin(miter), depth + 1.0], True)
+    # sized at the TOP of the trench, not at the wall's foot: the miter plane
+    # keeps moving outward with height, so a trench cut to the foot's width
+    # leaves the base's top edge poking inside it
+    box = m3d.Manifold.cube([length, 2 * wall_margin(FACE_THICKNESS, miter), depth + 1.0], True)
     box = box.rotate([0, 0, math.degrees(math.atan2(by - ay, bx - ax))])
     return box.translate([(ax + bx) / 2, (ay + by) / 2,
                           HINGE_THICKNESS + (depth + 1.0) / 2])
@@ -362,7 +379,9 @@ if __name__ == "__main__":
     for angle in sorted(set(FOLD_ANGLES.values())):
         m = math.tan(math.radians(angle) / 2)
         print(f"  a {angle:6.2f} deg fold: contact faces meet at {stop_angle_deg(m):6.2f} deg "
-              f"({stop_angle_deg(m) - angle:+.2f}), bare strip {2 * foot_margin(m):.2f}mm wide")
+              f"({stop_angle_deg(m) - angle:+.2f}), bare strip "
+              f"{2 * wall_margin(FACE_THICKNESS, m):.2f}mm wide, wall rejoins the miter at "
+              f"z={relief_knee(m):.2f}mm")
     print(f"base {FACE_THICKNESS:.2f}mm under the faces, {HINGE_THICKNESS:.2f}mm at the folds")
 
     solids = []
@@ -409,8 +428,9 @@ if __name__ == "__main__":
     solid, face_2d, path = solids[0]
     i = min(len(path) // 2, len(path) - 2)
     seam = edge_key(*shared_verts(SOLID.faces, path[i], path[i + 1]))
-    worst = max(abs(m - fold_margin(z, miter_of(seam))) for z, m in
-                measure_wall_profile(solid, face_2d, path) if z > RELIEF_Z + 0.2)
+    knee = relief_knee(miter_of(seam))
+    worst = max(abs(m - wall_margin(z, miter_of(seam))) for z, m in
+                measure_wall_profile(solid, face_2d, path) if z > knee + 0.2)
     print(f"wall face measured off the finished mesh matches the design to {worst:.4f}mm")
     assert worst < 0.05, "the printed wall is not where the design says it is"
 
