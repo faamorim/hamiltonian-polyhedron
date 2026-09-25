@@ -1,20 +1,55 @@
-"""Generates each cap's 10-face strip as ONE flat, foldable print: a thin
-continuous base (the "paper," and the living hinge at every fold line) with
-a raised, open-topped, hollow frustum on top of each triangle. Neighboring
-frustums are inset from the shared edge and don't touch each other, so only
-the thin base has to flex when the strip is folded by hand into the
-icosahedron's real 3D shape afterward.
+"""Generates a cap's 10-face strip as ONE flat, foldable print: a continuous
+base (the "paper", and the living hinge at every fold line) carrying a
+raised, open-topped frustum on each triangle. The strip is folded by hand
+afterwards into the icosahedron's real 3D shape.
 
-Why flat instead of pre-folded: printing flat is about as reliable as FDM
-printing gets (zero overhangs anywhere), and the whole strip stays perfectly
-aligned since it's one connected print -- no per-edge connectors needed at
-all. The tradeoff is the fold itself: rigid filaments like PLA can crack
-when bent, so this is explicitly a prototype -- if a fold doesn't survive
-being bent to the correct angle, glue/reinforce it there instead.
+Why flat: printing flat is about as reliable as FDM gets (no overhangs
+anywhere) and the whole strip stays aligned because it is one connected
+print. The tradeoff is the fold itself -- rigid filaments like PLA can crack
+when bent, so this is explicitly a prototype; if a fold does not survive
+being bent to the correct angle, glue or reinforce it there.
 
-The two caps are NOT congruent (verified: no icosahedral symmetry -- of all
-120, including reflections -- maps cap 0's face set onto cap 1's), so each
-gets its own file, not a shared/mirrored one.
+ONE FILE, PRINTED TWICE. The two caps are not related by any symmetry of the
+icosahedron, but their flat NETS are congruent -- a 120 degree rotation maps
+one onto the other exactly, because unfolding keeps only the local turn
+pattern and forgets which global vertices are involved. Since this part is
+printed flat, that makes the two caps the same physical object, and the
+script checks it rather than assuming it.
+
+TWO DECOUPLINGS. Earlier versions used one number for two unrelated jobs
+each, and were necessarily bad at both:
+
+  * CLEARANCE set both the bare strip of base left free to flex at a fold
+    AND where the wall's contact face sat. Pulling the wall back far enough
+    to bend also parked it a constant distance short of its neighbour, so
+    the walls never met at the true fold angle -- the strip only stopped
+    when the wall TOPS jammed, about 13 degrees past the target, leaving the
+    gap at the base that showed up on the first print. Now HINGE_GAP sets
+    the bare strip and CONTACT_CLEARANCE sets the contact face, and the
+    pull-back ramps away over RELIEF_HEIGHT so the wall returns to the true
+    miter plane for the rest of its height.
+
+  * BASE_THICKNESS set both the flexibility of the hinge AND the stiffness
+    of the face skin. Thin enough to fold meant floppy faces, and the
+    floppiness got worse the bigger the model. Now FACE_THICKNESS carries
+    the faces and the base is milled down to HINGE_THICKNESS only in the
+    bare strip along each fold.
+
+The miter is measured from the real pivot -- the middle of the THINNED
+hinge, not the top of the base -- since that is the line the sheet actually
+bends about.
+
+SCALE. TARGET_EDGE is the only dimension that scales the model; everything
+else is absolute millimetres, because the hinge is a local feature whose
+behaviour depends on the printer and filament, not on how big the
+icosahedron is. So the fold behaves identically at any size, and the script
+asserts the chosen size still leaves a sane frustum top and fits the bed.
+
+NOT YET IMPLEMENTED, deliberately -- both wanted, neither urgent:
+  * recesses in the frustum floors for magnets at the seam;
+  * a shallow inset on the end triangle of each strip to take a contrasting
+    insert, so a black strip carries a white triangle and vice versa (the
+    yin-yang reading of the two interlocking caps).
 
 Requires: pip install manifold3d numpy
 
@@ -23,238 +58,194 @@ Run from the repo root:
 """
 
 import math
+
 import manifold3d as m3d
+import numpy as np
 
-PHI = (1 + 5 ** 0.5) / 2
+from polyhedra import ICOSAHEDRON, unfold, compute_fold_edges, shared_verts, edge_key
 
-VERTICES = [
-    [-1, PHI, 0], [1, PHI, 0], [-1, -PHI, 0], [1, -PHI, 0],
-    [0, -1, PHI], [0, 1, PHI], [0, -1, -PHI], [0, 1, -PHI],
-    [PHI, 0, -1], [PHI, 0, 1], [-PHI, 0, -1], [-PHI, 0, 1],
-]
-FACES = [
-    [0, 11, 5], [0, 5, 1], [0, 1, 7], [0, 7, 10], [0, 10, 11],
-    [1, 5, 9], [5, 11, 4], [11, 10, 2], [10, 7, 6], [7, 1, 8],
-    [3, 9, 4], [3, 4, 2], [3, 2, 6], [3, 6, 8], [3, 8, 9],
-    [4, 9, 5], [2, 4, 11], [6, 2, 10], [8, 6, 7], [9, 8, 1],
-]
-CYCLE = [0, 11, 5, 1, 7, 6, 3, 8, 9, 4, 2, 10]
+SOLID = ICOSAHEDRON
 
-TARGET_EDGE = 22.0      # mm, prototype face edge length
-BASE_THICKNESS = 0.8    # mm, thin continuous "paper" layer -- the living hinge
-WALL_HEIGHT = 3.0       # mm, raised rim height above the base
-CLEARANCE = 0.4         # mm, minimum gap kept between neighboring walls at every
-                        # height, even at the target fold angle -- keeps them
-                        # mechanically independent (only the thin base connects
-                        # them) and leaves room for print tolerance
-FOLD_ANGLE_DEG = 41.81031489577859  # exact: 180 - icosahedron's dihedral angle
-TOP_MARGIN = 1.0        # mm, extra inset on FREE (non-fold) edges at the top,
-                        # purely cosmetic -- tapers the rim like the fold edges do
-OVERLAP = 0.3           # mm, the frustum's base is embedded this far INTO the base
-                        # layer (not just touching it) -- touching-but-not-overlapping
-                        # solids are a known ambiguous case for mesh boolean union
+# --- scale ----------------------------------------------------------------
+TARGET_EDGE = 22.0          # mm; the ONLY dimension that scales with the model
+BED_MM = 180.0              # printer bed, checked against the finished strip
 
-# A CONSTANT inset margin (independent of height) leaves a wedge-shaped gap
-# that does NOT close when folded: at height h above the base, two opposing
-# points only meet if each is inset by h*tan(fold_angle/2) -- exactly a
-# mitered edge, the same trick as a picture frame's mitered corner. Using a
-# constant margin instead (this file's first attempt) left a persistent
-# ~1-3mm gap at the target fold angle even at the top of a 3mm wall.
+# --- base: stiffness and flexibility, separately --------------------------
+FACE_THICKNESS = 1.2        # mm, skin under a face
+HINGE_THICKNESS = 0.6       # mm, skin in the bare strip along a fold
+HINGE_GAP = 0.8             # mm, width of that bare strip (wall foot to wall foot)
+
+# --- walls: bending relief and contact face, separately -------------------
+WALL_HEIGHT = 3.0           # mm, rim height above the face
+RELIEF_HEIGHT = 1.2         # mm, height over which the foot's pull-back ramps away
+CONTACT_CLEARANCE = 0.08    # mm, how far the contact face sits off the true miter.
+                            # Not zero: a wall printing proud would stop the fold
+                            # BEFORE the target angle, which is a hard stop you
+                            # cannot push past -- worse than a small gap.
+
+FREE_EDGE_MARGIN = 0.4      # mm, inset of the wall on silhouette (non-fold) edges
+TOP_MARGIN = 1.0            # mm, extra inset there at the top -- cosmetic taper
+OVERLAP = 0.3               # mm, frustum foot embedded INTO the base (touching-but-
+                            # not-overlapping solids are ambiguous for mesh booleans)
+
+FOLD_ANGLE_DEG = 41.81031489577859   # exact: 180 - the icosahedron's dihedral angle
 FOLD_MITER = math.tan(math.radians(FOLD_ANGLE_DEG) / 2)
 
+PIVOT_Z = HINGE_THICKNESS / 2        # the sheet bends about the middle of the thinned band
+FOOT_Z = FACE_THICKNESS - OVERLAP
+TOP_Z = FACE_THICKNESS + WALL_HEIGHT
+RELIEF_Z = FACE_THICKNESS + RELIEF_HEIGHT
 
-def edge_key(a, b):
-    return (a, b) if a < b else (b, a)
-
-
-def internal_adjacency(faces, cycle):
-    cycle_edges = {edge_key(cycle[i], cycle[(i + 1) % len(cycle)]) for i in range(len(cycle))}
-    face_edge_map = {}
-    for fi, f in enumerate(faces):
-        for k in range(3):
-            key = edge_key(f[k], f[(k + 1) % 3])
-            face_edge_map.setdefault(key, []).append(fi)
-    adj = {i: [] for i in range(len(faces))}
-    for key, lst in face_edge_map.items():
-        if len(lst) == 2 and key not in cycle_edges:
-            adj[lst[0]].append(lst[1])
-            adj[lst[1]].append(lst[0])
-    return adj
+assert 0 < HINGE_THICKNESS <= FACE_THICKNESS, "hinge cannot be thicker than the face"
+assert 0 < RELIEF_HEIGHT < WALL_HEIGHT, "the relief must end below the top of the wall"
 
 
-def split_into_caps(faces, adj):
-    comp_of = [-1] * len(faces)
-    comp = 0
-    for s in range(len(faces)):
-        if comp_of[s] != -1:
-            continue
-        stack = [s]
-        comp_of[s] = comp
-        while stack:
-            f = stack.pop()
-            for nb in adj[f]:
-                if comp_of[nb] == -1:
-                    comp_of[nb] = comp
-                    stack.append(nb)
-        comp += 1
-    return [[i for i in range(len(faces)) if comp_of[i] == c] for c in range(comp)]
+
+def fold_margin(z):
+    """How far the wall face sits from its fold line, at height z above the
+    outer skin. Above the relief it is the true miter plane through the pivot,
+    offset by CONTACT_CLEARANCE; below, it is pulled back by enough to leave
+    HINGE_GAP of bare base, ramping away linearly over RELIEF_HEIGHT."""
+    miter = max(0.0, z - PIVOT_Z) * FOLD_MITER
+    pullback = HINGE_GAP / 2 - CONTACT_CLEARANCE - max(0.0, FOOT_Z - PIVOT_Z) * FOLD_MITER
+    assert pullback >= 0, (
+        f"HINGE_GAP of {HINGE_GAP}mm is narrower than the miter already demands at the "
+        f"wall foot; raise HINGE_GAP or lower FACE_THICKNESS")
+    ramp = max(0.0, 1.0 - (z - FOOT_Z) / RELIEF_HEIGHT)
+    return CONTACT_CLEARANCE + miter + pullback * ramp
 
 
-def walk_path(cap_faces, adj):
-    """A cap's internal adjacency is always a simple path (verified: 9 edges
-    on 10 faces, both extremities degree 1, no branching) -- walk it end to end."""
-    ends = [f for f in cap_faces if len(adj[f]) == 1]
-    start = ends[0]
-    path = [start]
-    prev, cur = None, start
-    while True:
-        nxt = [n for n in adj[cur] if n != prev]
-        if not nxt:
-            break
-        prev, cur = cur, nxt[0]
-        path.append(cur)
-    return path
+# The wall's foot must not overhang the thinned band, or it would be left
+# standing on air where the trench cuts under it. By construction it lands
+# exactly on the trench wall; check it rather than trust it.
+assert abs(fold_margin(FOOT_Z) - HINGE_GAP / 2) < 1e-9, (
+    f"the wall foot sits at {fold_margin(FOOT_Z):.4f}mm but the thinned band "
+    f"reaches {HINGE_GAP / 2:.4f}mm -- the foot would overhang the trench")
 
 
-def shared_verts(fa, fb):
-    return [v for v in FACES[fa] if v in FACES[fb]]
+def free_margin(z):
+    frac = (z - FOOT_Z) / (TOP_Z - FOOT_Z)
+    return FREE_EDGE_MARGIN + frac * TOP_MARGIN
 
 
-def unfold(path, edge_len):
-    """Lay the path of equilateral triangles out flat, edge to edge, each new
-    triangle placed on the side away from its predecessor's own third vertex
-    (standard net-unfolding)."""
-    h = edge_len * math.sqrt(3) / 2
-    face_2d = {}
-    f0 = FACES[path[0]]
-    face_2d[path[0]] = list(zip(f0, [(0.0, 0.0), (edge_len, 0.0), (edge_len / 2, h)]))
-
-    def pt_of(fi, gv):
-        for g, p in face_2d[fi]:
-            if g == gv:
-                return p
-
-    for i in range(1, len(path)):
-        fprev, fcur = path[i - 1], path[i]
-        a, b = shared_verts(fprev, fcur)
-        pa, pb = pt_of(fprev, a), pt_of(fprev, b)
-        third = [v for v in FACES[fcur] if v not in (a, b)][0]
-        prev_third = [v for v in FACES[fprev] if v not in (a, b)][0]
-        prev_third_pt = pt_of(fprev, prev_third)
-
-        dx, dy = pb[0] - pa[0], pb[1] - pa[1]
-        d = math.hypot(dx, dy)
-        mx, my = (pa[0] + pb[0]) / 2, (pa[1] + pb[1]) / 2
-        hgt = math.sqrt(max(edge_len * edge_len - (d / 2) ** 2, 0))
-        ux, uy = -dy / d, dx / d
-        c1 = (mx + ux * hgt, my + uy * hgt)
-        c2 = (mx - ux * hgt, my - uy * hgt)
-        d1 = math.hypot(c1[0] - prev_third_pt[0], c1[1] - prev_third_pt[1])
-        d2 = math.hypot(c2[0] - prev_third_pt[0], c2[1] - prev_third_pt[1])
-        new_pt = c1 if d1 > d2 else c2
-
-        face_2d[fcur] = [(a, pa), (b, pb), (third, new_pt)]
-    return face_2d
+def margins_at(z, is_fold):
+    return [fold_margin(z) if f else free_margin(z) for f in is_fold]
 
 
-def compute_fold_edges(path):
-    """Global vertex-pair keys for every internal (fold) edge in this path."""
-    fold_edges = set()
-    for i in range(len(path) - 1):
-        fa, fb = path[i], path[i + 1]
-        a, b = shared_verts(fa, fb)
-        fold_edges.add(edge_key(a, b))
-    return fold_edges
-
-
-def offset_triangle_per_edge(pts2d, margins):
-    """Move each of the triangle's 3 edges inward (toward the centroid side)
-    by its own margin, then re-intersect consecutive edges for the new
-    vertices. Unlike a uniform centroid-scale, this allows a DIFFERENT inset
-    per edge -- needed because fold edges must taper with height (a miter)
-    while free edges don't."""
-    cx = sum(p[0] for p in pts2d) / 3
-    cy = sum(p[1] for p in pts2d) / 3
+def offset_polygon_per_edge(pts2d, margins):
+    """Move each edge inward by its OWN margin and re-intersect consecutive
+    edges. A uniform centroid-scale cannot do this, and the whole design needs
+    it: fold edges taper with height (the miter) while free edges do not."""
+    n = len(pts2d)
+    cx = sum(p[0] for p in pts2d) / n
+    cy = sum(p[1] for p in pts2d) / n
     lines = []
-    for k in range(3):
-        p1, p2 = pts2d[k], pts2d[(k + 1) % 3]
+    for k in range(n):
+        p1, p2 = pts2d[k], pts2d[(k + 1) % n]
         dx, dy = p2[0] - p1[0], p2[1] - p1[1]
         length = math.hypot(dx, dy)
         nx, ny = -dy / length, dx / length
         midx, midy = (p1[0] + p2[0]) / 2, (p1[1] + p2[1]) / 2
         if nx * (cx - midx) + ny * (cy - midy) < 0:
             nx, ny = -nx, -ny
-        offset_p1 = (p1[0] + nx * margins[k], p1[1] + ny * margins[k])
-        lines.append((offset_p1, (dx, dy)))
+        lines.append(((p1[0] + nx * margins[k], p1[1] + ny * margins[k]), (dx, dy)))
 
-    def line_intersect(p1, d1, p2, d2):
-        a11, a12 = d1[0], -d2[0]
-        a21, a22 = d1[1], -d2[1]
-        b1, b2 = p2[0] - p1[0], p2[1] - p1[1]
-        det = a11 * a22 - a12 * a21
+    def intersect(p1, d1, p2, d2):
+        det = d1[0] * -d2[1] - -d2[0] * d1[1]
         if abs(det) < 1e-9:
             return p1
-        t = (b1 * a22 - a12 * b2) / det
+        b1, b2 = p2[0] - p1[0], p2[1] - p1[1]
+        t = (b1 * -d2[1] - -d2[0] * b2) / det
         return (p1[0] + t * d1[0], p1[1] + t * d1[1])
 
-    return [line_intersect(*lines[(k - 1) % 3], *lines[k]) for k in range(3)]
+    return [intersect(*lines[(k - 1) % n], *lines[k]) for k in range(n)]
+
+
+def inradius(pts2d):
+    a = np.array(pts2d)
+    n = len(a)
+    area = 0.5 * abs(sum(a[k][0] * a[(k + 1) % n][1] - a[(k + 1) % n][0] * a[k][1]
+                         for k in range(n)))
+    per = sum(np.linalg.norm(a[k] - a[(k + 1) % n]) for k in range(n))
+    return 2 * area / per
 
 
 def raised_frustum(pts2d, global_verts, fold_edges):
-    """A raised, solid, tapered rim for one face. Fold-facing sides are
-    mitered at half the icosahedron's fold angle, so when the strip is bent
-    to the true dihedral angle, neighboring walls close up to just
-    CLEARANCE apart at every height -- not just at the base."""
-    is_fold = [edge_key(global_verts[k], global_verts[(k + 1) % 3]) in fold_edges for k in range(3)]
-
-    bottom_margins = [CLEARANCE] * 3  # at h=0 the miter term vanishes regardless
-    top_margins = [
-        CLEARANCE + (WALL_HEIGHT * FOLD_MITER if is_fold[k] else TOP_MARGIN)
-        for k in range(3)
-    ]
-
-    base_ring = offset_triangle_per_edge(pts2d, bottom_margins)
-    top_ring = offset_triangle_per_edge(pts2d, top_margins)
-    verts = ([(x, y, BASE_THICKNESS - OVERLAP) for x, y in base_ring]
-             + [(x, y, BASE_THICKNESS + WALL_HEIGHT) for x, y in top_ring])
+    """One face's rim. Three rings, not two: the wall's foot is pulled back to
+    clear the hinge, then returns to the miter plane, and that needs a profile
+    with a knee in it. The margin is convex in z (the slope only increases),
+    so the convex hull of the three rings is exactly the intended solid."""
+    n = len(pts2d)
+    is_fold = [edge_key(global_verts[k], global_verts[(k + 1) % n]) in fold_edges
+               for k in range(n)]
+    verts = []
+    for z in (FOOT_Z, RELIEF_Z, TOP_Z):
+        ring = offset_polygon_per_edge(pts2d, margins_at(z, is_fold))
+        assert inradius(ring) > 0.2, (
+            f"the wall insets have eaten this face at TARGET_EDGE={TARGET_EDGE}mm "
+            f"(top inradius {inradius(ring):.2f}mm) -- the model is too small")
+        verts += [(x, y, z) for x, y in ring]
     return m3d.Manifold.hull_points(verts)
 
 
 def ccw(pts):
-    s = sum(pts[i][0] * pts[(i + 1) % 3][1] - pts[(i + 1) % 3][0] * pts[i][1] for i in range(3))
+    n = len(pts)
+    s = sum(pts[k][0] * pts[(k + 1) % n][1] - pts[(k + 1) % n][0] * pts[k][1] for k in range(n))
     return pts if s > 0 else list(reversed(pts))
 
 
-def build_strip(path, edge_len=TARGET_EDGE):
-    face_2d = unfold(path, edge_len)
-    fold_edges = compute_fold_edges(path)
+def hinge_trench(pa, pb):
+    """The cut that thins the base along one fold line. It spans exactly the
+    bare strip between the two wall feet, so it never undercuts a wall."""
+    ax, ay = pa
+    bx, by = pb
+    length = math.hypot(bx - ax, by - ay)
+    depth = FACE_THICKNESS - HINGE_THICKNESS
+    if depth <= 0:
+        return None
+    box = m3d.Manifold.cube([length, HINGE_GAP, depth + 1.0], True)
+    box = box.rotate([0, 0, math.degrees(math.atan2(by - ay, bx - ax))])
+    return box.translate([(ax + bx) / 2, (ay + by) / 2,
+                          HINGE_THICKNESS + (depth + 1.0) / 2])
 
-    # CrossSection needs consistent CCW winding per contour (a CW contour is
-    # treated as a hole) -- the zigzag unfolding naturally alternates
-    # triangle orientation, so normalize each one before unioning.
+
+def build_strip(path, edge_len=TARGET_EDGE):
+    face_2d = unfold(SOLID.faces, path, edge_len)
+    fold_edges = compute_fold_edges(SOLID.faces, path)
+
+    # CrossSection needs consistent CCW winding per contour (a CW contour reads
+    # as a hole) -- the zigzag unfolding alternates orientation face to face.
     contours = [ccw([p for _, p in face_2d[fi]]) for fi in path]
-    base = m3d.Manifold.extrude(m3d.CrossSection(contours), BASE_THICKNESS)
+    base = m3d.Manifold.extrude(m3d.CrossSection(contours), FACE_THICKNESS)
+
+    trenches = []
+    for i in range(len(path) - 1):
+        a, b = shared_verts(SOLID.faces, path[i], path[i + 1])
+        pts = dict(face_2d[path[i]])
+        t = hinge_trench(pts[a], pts[b])
+        if t is not None:
+            trenches.append(t)
+    if trenches:
+        base -= m3d.Manifold.batch_boolean(trenches, m3d.OpType.Add)
 
     frustums = [
         raised_frustum([p for _, p in face_2d[fi]], [gv for gv, _ in face_2d[fi]], fold_edges)
         for fi in path
     ]
-    solid = m3d.Manifold.batch_boolean([base] + frustums, m3d.OpType.Add)
-    return solid, face_2d
+    return m3d.Manifold.batch_boolean([base] + frustums, m3d.OpType.Add), face_2d
 
 
 def export_stl(manifold_obj, path_out):
     mesh = manifold_obj.to_mesh()
-    verts = mesh.vert_properties
-    tris = mesh.tri_verts
+    verts, tris = mesh.vert_properties, mesh.tri_verts
     with open(path_out, "w") as f:
         f.write("solid part\n")
         for tri in tris:
             v0, v1, v2 = (verts[i][:3] for i in tri)
-            ux, uy, uz = (v1[0] - v0[0], v1[1] - v0[1], v1[2] - v0[2])
-            vx, vy, vz = (v2[0] - v0[0], v2[1] - v0[1], v2[2] - v0[2])
-            nx, ny, nz = (uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx)
-            norm = (nx ** 2 + ny ** 2 + nz ** 2) ** 0.5 or 1.0
+            u = (v1[0] - v0[0], v1[1] - v0[1], v1[2] - v0[2])
+            w = (v2[0] - v0[0], v2[1] - v0[1], v2[2] - v0[2])
+            nx, ny, nz = (u[1]*w[2] - u[2]*w[1], u[2]*w[0] - u[0]*w[2], u[0]*w[1] - u[1]*w[0])
+            norm = (nx*nx + ny*ny + nz*nz) ** 0.5 or 1.0
             f.write(f"  facet normal {nx/norm:.6f} {ny/norm:.6f} {nz/norm:.6f}\n")
             f.write("    outer loop\n")
             for v in (v0, v1, v2):
@@ -263,15 +254,129 @@ def export_stl(manifold_obj, path_out):
         f.write("endsolid part\n")
 
 
-if __name__ == "__main__":
-    adj = internal_adjacency(FACES, CYCLE)
-    caps = split_into_caps(FACES, adj)
-    paths = [walk_path(cap, adj) for cap in caps]
+def stop_angle_deg():
+    """The fold angle at which the two contact faces actually meet. The wall
+    top is the leading edge once the fold passes the target, so contact is
+    where it reaches the mirror plane."""
+    lever = TOP_Z - PIVOT_Z
+    return 2 * math.degrees(math.atan((CONTACT_CLEARANCE + lever * FOLD_MITER) / lever))
 
+
+def net_turn(face_2d, path):
+    """Which way this net's first step points -- the reference for lining one
+    cap's net up with the other's."""
+    centre = lambda fi: np.mean([p for _, p in face_2d[fi]], axis=0)
+    d = centre(path[1]) - centre(path[0])
+    return math.degrees(math.atan2(d[1], d[0]))
+
+
+def congruence_error(a, b, turn_deg):
+    """Volume of b that fails to coincide with a after the best turn about the
+    build plate, trying the net's turn and the icosahedron's 3-fold multiples
+    of it. Zero means the two caps are literally the same object."""
+    mid = lambda m: ((m.bounding_box()[0] + m.bounding_box()[3]) / 2,
+                     (m.bounding_box()[1] + m.bounding_box()[4]) / 2)
+    ax, ay = mid(a)
+    bx, by = mid(b)
+    best = None
+    for deg in (turn_deg, turn_deg + 120, turn_deg + 240):
+        r = b.translate([-bx, -by, 0]).rotate([0, 0, deg])
+        rx, ry = mid(r)
+        r = r.translate([ax - rx, ay - ry, 0])
+        err = (a - r).volume() + (r - a).volume()
+        if best is None or err < best[0]:
+            best = (err, deg % 360)
+    return best
+
+
+def ray_hits_segment(origin, direction, a, b):
+    """Where a ray leaving `origin` along `direction` first crosses segment ab,
+    as a distance along the ray, or None. Measuring by ray rather than by
+    polygon vertex matters here: the wall face runs parallel to its fold line,
+    so its only vertices are at the far corners of the triangle, nowhere near
+    the point being measured."""
+    e = np.asarray(b, float) - np.asarray(a, float)
+    det = direction[0] * -e[1] - -e[0] * direction[1]
+    if abs(det) < 1e-12:
+        return None
+    r = np.asarray(a, float) - origin
+    t = (r[0] * -e[1] - -e[0] * r[1]) / det
+    sseg = (direction[0] * r[1] - direction[1] * r[0]) / det
+    return t if t > 1e-9 and -1e-9 <= sseg <= 1 + 1e-9 else None
+
+
+def measure_wall_profile(solid, face_2d, path, samples=25):
+    """Read the wall face back off the FINISHED mesh, so the CSG is checked
+    against the design rather than trusted. Slices the solid at a series of
+    heights and measures how far the material starts from the fold line --
+    sampling the surface itself, not just the few heights that happen to
+    carry mesh vertices."""
+    i = len(path) // 2
+    va, vb = shared_verts(SOLID.faces, path[i], path[i + 1])
+    pts = dict(face_2d[path[i]])
+    pa, pb = np.array(pts[va]), np.array(pts[vb])
+    mid, span = (pa + pb) / 2, np.linalg.norm(pb - pa)
+    u = (pb - pa) / span
+    nrm = np.array([-u[1], u[0]])
+    # which side of the fold line this face lies on
+    face_centre = np.mean([q for _, q in face_2d[path[i]]], axis=0)
+    if np.dot(nrm, face_centre - mid) < 0:
+        nrm = -nrm
+
+    out = []
+    for z in np.linspace(FACE_THICKNESS + 0.05, TOP_Z - 0.05, samples):
+        hits = []
+        for poly in solid.slice(float(z)).to_polygons():
+            q = np.asarray(poly)
+            for k in range(len(q)):
+                t = ray_hits_segment(mid, nrm, q[k], q[(k + 1) % len(q)])
+                if t is not None:
+                    hits.append(t)
+        if hits:
+            out.append((z, min(hits)))
+    return out
+
+
+if __name__ == "__main__":
+    paths = SOLID.strips()
+    print(f"fold angle wanted {FOLD_ANGLE_DEG:.2f} deg; the contact faces meet at "
+          f"{stop_angle_deg():.2f} deg ({stop_angle_deg() - FOLD_ANGLE_DEG:+.2f})")
+    print(f"bare base strip at a fold: {HINGE_GAP:.2f}mm wide, {HINGE_THICKNESS:.2f}mm "
+          f"thick, under {FACE_THICKNESS:.2f}mm faces")
+
+    solids = []
     for i, path in enumerate(paths):
-        solid, _ = build_strip(path)
-        n_parts = len(solid.decompose())
-        assert n_parts == 1, f"cap {i} strip is split into {n_parts} disconnected shells"
-        print(f"cap{i}: path={path}  volume={solid.volume():.1f}mm3  bbox={solid.bounding_box()}")
-        export_stl(solid, f"hardware/tests/flat_strip_cap{i}.stl")
-        print(f"  wrote hardware/tests/flat_strip_cap{i}.stl")
+        solid, face_2d = build_strip(path)
+        n = len(solid.decompose())
+        assert n == 1, f"cap {i} is split into {n} disconnected shells"
+        bb = solid.bounding_box()
+        w, h = bb[3] - bb[0], bb[4] - bb[1]
+        assert max(w, h) <= BED_MM, (
+            f"strip is {w:.0f}x{h:.0f}mm and will not fit a {BED_MM:.0f}mm bed "
+            f"at TARGET_EDGE={TARGET_EDGE}mm")
+        print(f"cap{i}: volume {solid.volume():8.1f}mm3   footprint {w:.1f} x {h:.1f} x "
+              f"{bb[5] - bb[2]:.1f}mm")
+        solids.append((solid, face_2d, path))
+
+    # The design is only worth one file if the two caps really are the same
+    # part. Comparing vertex lists does not answer that -- the two meshes are
+    # tessellated differently (205 vs 201 vertices) even though the solids are
+    # identical. Ask the boolean kernel instead: turn one onto the other and
+    # measure the volume that fails to overlap.
+    print(f"\nboth caps: volume {solids[0][0].volume():.6f} / "
+          f"{solids[1][0].volume():.6f}, area {solids[0][0].surface_area():.6f} / "
+          f"{solids[1][0].surface_area():.6f}")
+    diff, turn = congruence_error(solids[0][0], solids[1][0], net_turn(*solids[0][1:]) -
+                                  net_turn(*solids[1][1:]))
+    print(f"a {turn:.2f} deg turn leaves {diff:.6f}mm3 of the {solids[0][0].volume():.0f}mm3 "
+          f"solid unmatched -- {'ONE part, printed twice' if diff < 1e-3 else 'NOT congruent'}")
+    assert diff < 1e-3, "the two caps are not the same part after all"
+
+    solid, face_2d, path = solids[0]
+    worst = max(abs(m - fold_margin(z)) for z, m in
+                measure_wall_profile(solid, face_2d, path) if z > RELIEF_Z + 0.2)
+    print(f"wall face measured off the finished mesh matches the design to {worst:.4f}mm")
+    assert worst < 0.05, "the printed wall is not where the design says it is"
+
+    export_stl(solid, "hardware/tests/flat_strip.stl")
+    print("\nwrote hardware/tests/flat_strip.stl  (print TWO of these)")

@@ -60,7 +60,9 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 
-from gen_flat_strip import VERTICES, FACES, edge_key
+from polyhedra import ICOSAHEDRON, edge_key
+
+VERTICES, FACES = ICOSAHEDRON.vertices, ICOSAHEDRON.faces
 
 # Landscape US Letter -- matches hardware/scripts/gen_flat_strip_pdf.py so the
 # two worksheets print as a set.
