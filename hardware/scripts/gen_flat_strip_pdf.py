@@ -95,9 +95,16 @@ def net_polygon(path, face_2d):
 # curved surface directly (a "stick marionette" rather than gripping the
 # model itself). One tab at each extremity of the strip, so a cap is held
 # from both of its ends rather than from two adjacent points.
-TAB_BASE_FRAC = 0.55   # width where it meets the face, as a fraction of the edge length
-TAB_TOP_FRAC = 0.40    # width at the outer tip
-TAB_HEIGHT_FRAC = 0.45  # how far the tab protrudes, as a fraction of the edge length
+# A tab is gripped between a thumb and one finger, so it is sized in
+# millimetres for a hand rather than as a fraction of the face. Scaled to the
+# face it tracked the wrong thing entirely: at the edge lengths these sheets
+# auto-fit to, the tetrahedron's tabs came out 55mm wide and the
+# dodecahedron's 16mm, for the same job. Only the cap below is proportional,
+# so a tab can never be wider than the edge it stands on.
+TAB_BASE_MM = 18.0      # width where it meets the face
+TAB_TOP_MM = 13.0       # width at the outer tip
+TAB_HEIGHT_MM = 15.0    # how far it protrudes
+TAB_MAX_EDGE_FRAC = 0.7  # ... but never wider than this much of its own edge
 
 
 def end_free_edges(solid, path):
@@ -158,7 +165,7 @@ def pick_tab_edges(solid, paths, face_2ds):
         f"tabs cannot be made to meet on the assembled solid")
 
 
-def tab_polygon_points(face_2d, fi, a, b):
+def tab_polygon_points(face_2d, fi, a, b, mm=1.0):
     """The tab's 4 outer corners in the same LOCAL (pre-page-transform) 2D
     frame as the rest of that net, so it can go through the same rotate/
     translate pipeline as everything else."""
@@ -171,16 +178,23 @@ def tab_polygon_points(face_2d, fi, a, b):
     m = (pa + pb) / 2
     if np.dot(n, m - c) < 0:
         n = -n
-    base_w, top_w, h = edge_len * TAB_BASE_FRAC, edge_len * TAB_TOP_FRAC, edge_len * TAB_HEIGHT_FRAC
+    # `mm` is how long one millimetre is in this net's units, so the same tab
+    # can be drawn on the unit-scale net the nesting search works with and on
+    # the final full-size one.
+    base_mm, top_mm, height_mm = TAB_BASE_MM * mm, TAB_TOP_MM * mm, TAB_HEIGHT_MM * mm
+    # shrink the whole tab together if its edge is too short to carry one,
+    # so the shape stays the same rather than turning into a sliver
+    fit = min(1.0, TAB_MAX_EDGE_FRAC * edge_len / base_mm)
+    base_w, top_w, h = base_mm * fit, top_mm * fit, height_mm * fit
     base1, base2 = m - d * base_w / 2, m + d * base_w / 2
     tip1, tip2 = m + n * h - d * top_w / 2, m + n * h + d * top_w / 2
     return [tuple(base1), tuple(tip1), tuple(tip2), tuple(base2)]
 
 
-def net_polygon_with_tabs(path, face_2d, tab_edges):
+def net_polygon_with_tabs(path, face_2d, tab_edges, mm=1.0):
     poly = net_polygon(path, face_2d)
     for fi, a, b in tab_edges:
-        poly = unary_union([poly, Polygon(tab_polygon_points(face_2d, fi, a, b))])
+        poly = unary_union([poly, Polygon(tab_polygon_points(face_2d, fi, a, b, mm))])
     return poly
 
 
@@ -312,17 +326,31 @@ if __name__ == "__main__":
         f"the two nets are not congruent (best fit off by {align_err:.4f} edge lengths) -- "
         f"nesting two copies of one shape does not apply to this solid")
 
-    poly0 = net_polygon_with_tabs(paths[0], unit_2ds[0], tabs[0])
-    cx1, cy1 = centroid(unit_2ds[1], paths[1][0])  # pivot for cap1's rotation
-    poly1_aligned = shapely_rotate(
-        net_polygon_with_tabs(paths[1], unit_2ds[1], tabs[1]), align_deg, origin=(cx1, cy1))
-
     print("tab pairs (each sits on one seam edge, one tab from each cap): "
           + ", ".join(f"{a}-{b}" for _, a, b in tabs[0]))
 
-    best = best_nesting_offset(poly0, poly1_aligned, usable_w, usable_h, CUT_GAP_MM)
-    assert best is not None, "no nesting of the two strips fits on the page"
+    # Fixed-size tabs make the page fit a fixed point rather than a single
+    # solve: the nesting is searched on the unit-scale net, but how much room
+    # an 18mm tab takes up THERE depends on the edge length we are solving for.
+    # So guess, search, and feed the answer back until it stops moving.
+    cx1, cy1 = centroid(unit_2ds[1], paths[1][0])   # pivot for cap1's rotation
+    edge_len = 50.0
+    for _ in range(24):
+        mm = 1.0 / edge_len
+        poly0 = net_polygon_with_tabs(paths[0], unit_2ds[0], tabs[0], mm)
+        poly1_aligned = shapely_rotate(
+            net_polygon_with_tabs(paths[1], unit_2ds[1], tabs[1], mm),
+            align_deg, origin=(cx1, cy1))
+        best = best_nesting_offset(poly0, poly1_aligned, usable_w, usable_h, CUT_GAP_MM)
+        assert best is not None, "no nesting of the two strips fits on the page"
+        if abs(best[0] - edge_len) < 1e-4:
+            break
+        edge_len = (edge_len + best[0]) / 2      # damped, so it cannot oscillate
+    else:
+        raise AssertionError("the page fit did not settle")
     edge_len, off_dx, off_dy = best
+    mm = 1.0 / edge_len
+
     print(f"alignment rotation for cap1: {align_deg:.2f} deg")
     print(f"using edge length {edge_len:.1f}mm (nested fit, {PAGE_W_MM:.0f}x{PAGE_H_MM:.0f}mm landscape)")
 
