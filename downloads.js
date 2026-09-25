@@ -20,7 +20,13 @@ window.DOWNLOADS = [
       "edge": 22.0,
       "turn": 120.0
     },
-    "extras": []
+    "extras": [
+      {
+        "label": "Schlegel diagram",
+        "path": "hardware/tests/schlegel_tetrahedron.pdf",
+        "note": "the whole edge graph flat on one page, for tracing cycles by pencil"
+      }
+    ]
   },
   {
     "key": "cube",
@@ -42,7 +48,13 @@ window.DOWNLOADS = [
       "edge": 22.0,
       "turn": 0.0
     },
-    "extras": []
+    "extras": [
+      {
+        "label": "Schlegel diagram",
+        "path": "hardware/tests/schlegel_cube.pdf",
+        "note": "the whole edge graph flat on one page, for tracing cycles by pencil"
+      }
+    ]
   },
   {
     "key": "octahedron",
@@ -64,7 +76,13 @@ window.DOWNLOADS = [
       "edge": 22.0,
       "turn": 240.0
     },
-    "extras": []
+    "extras": [
+      {
+        "label": "Schlegel diagram",
+        "path": "hardware/tests/schlegel_octahedron.pdf",
+        "note": "the whole edge graph flat on one page, for tracing cycles by pencil"
+      }
+    ]
   },
   {
     "key": "trapezohedron",
@@ -87,7 +105,13 @@ window.DOWNLOADS = [
       "edge": 22.0,
       "turn": 335.4819
     },
-    "extras": []
+    "extras": [
+      {
+        "label": "Schlegel diagram",
+        "path": "hardware/tests/schlegel_trapezohedron.pdf",
+        "note": "the whole edge graph flat on one page, for tracing cycles by pencil"
+      }
+    ]
   },
   {
     "key": "dodecahedron",
@@ -109,7 +133,13 @@ window.DOWNLOADS = [
       "edge": 22.0,
       "turn": 108.0
     },
-    "extras": []
+    "extras": [
+      {
+        "label": "Schlegel diagram",
+        "path": "hardware/tests/schlegel_dodecahedron.pdf",
+        "note": "the whole edge graph flat on one page, for tracing cycles by pencil"
+      }
+    ]
   },
   {
     "key": "icosahedron",
