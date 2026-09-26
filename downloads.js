@@ -23,8 +23,8 @@ window.DOWNLOADS = [
           "edge": 27.4,
           "path": "hardware/tests/flat_strip_tetrahedron_25mm.stl",
           "bed": [
-            41.1,
-            23.7
+            40.8,
+            23.6
           ],
           "turn": 300.0
         },
@@ -33,8 +33,8 @@ window.DOWNLOADS = [
           "edge": 35.08,
           "path": "hardware/tests/flat_strip_tetrahedron_32mm.stl",
           "bed": [
-            52.6,
-            30.4
+            52.3,
+            30.2
           ],
           "turn": 120.0
         },
@@ -43,8 +43,8 @@ window.DOWNLOADS = [
           "edge": 43.85,
           "path": "hardware/tests/flat_strip_tetrahedron_40mm.stl",
           "bed": [
-            65.8,
-            38.0
+            65.5,
+            37.8
           ],
           "turn": 120.0
         },
@@ -53,8 +53,8 @@ window.DOWNLOADS = [
           "edge": 54.81,
           "path": "hardware/tests/flat_strip_tetrahedron_50mm.stl",
           "bed": [
-            82.2,
-            47.5
+            81.9,
+            47.3
           ],
           "turn": 300.0
         },
@@ -63,8 +63,8 @@ window.DOWNLOADS = [
           "edge": 69.06,
           "path": "hardware/tests/flat_strip_tetrahedron_63mm.stl",
           "bed": [
-            103.6,
-            59.8
+            103.3,
+            59.6
           ],
           "turn": 120.0
         }
@@ -101,8 +101,8 @@ window.DOWNLOADS = [
           "edge": 16.67,
           "path": "hardware/tests/flat_strip_cube_25mm.stl",
           "bed": [
-            50.0,
-            16.7
+            49.8,
+            16.5
           ],
           "turn": 180.0
         },
@@ -111,8 +111,8 @@ window.DOWNLOADS = [
           "edge": 21.33,
           "path": "hardware/tests/flat_strip_cube_32mm.stl",
           "bed": [
-            64.0,
-            21.3
+            63.8,
+            21.2
           ],
           "turn": 180.0
         },
@@ -121,8 +121,8 @@ window.DOWNLOADS = [
           "edge": 26.67,
           "path": "hardware/tests/flat_strip_cube_40mm.stl",
           "bed": [
-            80.0,
-            26.7
+            79.8,
+            26.5
           ],
           "turn": 180.0
         },
@@ -131,8 +131,8 @@ window.DOWNLOADS = [
           "edge": 33.33,
           "path": "hardware/tests/flat_strip_cube_50mm.stl",
           "bed": [
-            100.0,
-            33.3
+            99.8,
+            33.2
           ],
           "turn": 0.0
         },
@@ -141,8 +141,8 @@ window.DOWNLOADS = [
           "edge": 42.0,
           "path": "hardware/tests/flat_strip_cube_63mm.stl",
           "bed": [
-            126.0,
-            42.0
+            125.8,
+            41.8
           ],
           "turn": 0.0
         }
@@ -179,8 +179,8 @@ window.DOWNLOADS = [
           "edge": 21.27,
           "path": "hardware/tests/flat_strip_octahedron_25mm.stl",
           "bed": [
-            42.5,
-            36.8
+            42.3,
+            36.7
           ],
           "turn": 60.0
         },
@@ -189,8 +189,8 @@ window.DOWNLOADS = [
           "edge": 27.22,
           "path": "hardware/tests/flat_strip_octahedron_32mm.stl",
           "bed": [
-            54.4,
-            47.2
+            54.2,
+            47.0
           ],
           "turn": 60.0
         },
@@ -199,8 +199,8 @@ window.DOWNLOADS = [
           "edge": 34.03,
           "path": "hardware/tests/flat_strip_octahedron_40mm.stl",
           "bed": [
-            68.1,
-            58.9
+            67.8,
+            58.8
           ],
           "turn": 240.0
         },
@@ -209,8 +209,8 @@ window.DOWNLOADS = [
           "edge": 42.54,
           "path": "hardware/tests/flat_strip_octahedron_50mm.stl",
           "bed": [
-            85.1,
-            73.7
+            84.8,
+            73.5
           ],
           "turn": 240.0
         },
@@ -219,8 +219,8 @@ window.DOWNLOADS = [
           "edge": 53.6,
           "path": "hardware/tests/flat_strip_octahedron_63mm.stl",
           "bed": [
-            107.2,
-            92.8
+            106.9,
+            92.7
           ],
           "turn": 60.0
         }
@@ -258,8 +258,8 @@ window.DOWNLOADS = [
           "edge": 18.84,
           "path": "hardware/tests/flat_strip_trapezohedron_25mm.stl",
           "bed": [
-            56.5,
-            37.4
+            56.2,
+            37.2
           ],
           "turn": 335.4819
         },
@@ -268,8 +268,8 @@ window.DOWNLOADS = [
           "edge": 24.11,
           "path": "hardware/tests/flat_strip_trapezohedron_32mm.stl",
           "bed": [
-            72.3,
-            47.9
+            72.1,
+            47.7
           ],
           "turn": 335.4819
         },
@@ -278,8 +278,8 @@ window.DOWNLOADS = [
           "edge": 30.14,
           "path": "hardware/tests/flat_strip_trapezohedron_40mm.stl",
           "bed": [
-            90.4,
-            59.9
+            90.2,
+            59.7
           ],
           "turn": 335.4819
         },
@@ -288,8 +288,8 @@ window.DOWNLOADS = [
           "edge": 37.67,
           "path": "hardware/tests/flat_strip_trapezohedron_50mm.stl",
           "bed": [
-            113.0,
-            74.9
+            112.8,
+            74.7
           ],
           "turn": 335.4819
         },
@@ -298,8 +298,8 @@ window.DOWNLOADS = [
           "edge": 47.47,
           "path": "hardware/tests/flat_strip_trapezohedron_63mm.stl",
           "bed": [
-            142.4,
-            94.3
+            142.1,
+            94.1
           ],
           "turn": 335.4819
         }
@@ -336,8 +336,8 @@ window.DOWNLOADS = [
           "edge": 9.46,
           "path": "hardware/tests/flat_strip_dodecahedron_25mm.stl",
           "bed": [
-            67.8,
-            38.1
+            67.6,
+            37.9
           ],
           "turn": 288.0
         },
@@ -346,8 +346,8 @@ window.DOWNLOADS = [
           "edge": 12.11,
           "path": "hardware/tests/flat_strip_dodecahedron_32mm.stl",
           "bed": [
-            86.7,
-            48.8
+            86.5,
+            48.6
           ],
           "turn": 108.0
         },
@@ -356,8 +356,8 @@ window.DOWNLOADS = [
           "edge": 15.13,
           "path": "hardware/tests/flat_strip_dodecahedron_40mm.stl",
           "bed": [
-            108.4,
-            61.0
+            108.2,
+            60.8
           ],
           "turn": 288.0
         },
@@ -366,8 +366,8 @@ window.DOWNLOADS = [
           "edge": 18.92,
           "path": "hardware/tests/flat_strip_dodecahedron_50mm.stl",
           "bed": [
-            135.5,
-            76.2
+            135.3,
+            76.1
           ],
           "turn": 288.0
         },
@@ -376,8 +376,8 @@ window.DOWNLOADS = [
           "edge": 23.84,
           "path": "hardware/tests/flat_strip_dodecahedron_63mm.stl",
           "bed": [
-            170.7,
-            96.0
+            170.5,
+            95.9
           ],
           "turn": 108.0
         }
@@ -414,8 +414,8 @@ window.DOWNLOADS = [
           "edge": 14.35,
           "path": "hardware/tests/flat_strip_icosahedron_25mm.stl",
           "bed": [
-            57.4,
-            49.7
+            57.1,
+            49.6
           ],
           "turn": 300.0
         },
@@ -424,8 +424,8 @@ window.DOWNLOADS = [
           "edge": 18.37,
           "path": "hardware/tests/flat_strip_icosahedron_32mm.stl",
           "bed": [
-            73.5,
-            63.6
+            73.2,
+            63.5
           ],
           "turn": 120.0
         },
@@ -434,8 +434,8 @@ window.DOWNLOADS = [
           "edge": 22.96,
           "path": "hardware/tests/flat_strip_icosahedron_40mm.stl",
           "bed": [
-            91.8,
-            79.5
+            91.6,
+            79.4
           ],
           "turn": 120.0
         },
@@ -444,8 +444,8 @@ window.DOWNLOADS = [
           "edge": 28.7,
           "path": "hardware/tests/flat_strip_icosahedron_50mm.stl",
           "bed": [
-            114.8,
-            99.4
+            114.5,
+            99.3
           ],
           "turn": 120.0
         },
@@ -454,8 +454,8 @@ window.DOWNLOADS = [
           "edge": 36.16,
           "path": "hardware/tests/flat_strip_icosahedron_63mm.stl",
           "bed": [
-            144.7,
-            125.3
+            144.4,
+            125.1
           ],
           "turn": 120.0
         }

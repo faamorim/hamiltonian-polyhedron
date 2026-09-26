@@ -117,8 +117,6 @@ CONTACT_CLEARANCE = 0.08    # mm, how far the contact face sits off the true mit
                             # BEFORE the target angle, which is a hard stop you
                             # cannot push past -- worse than a small gap.
 
-FREE_EDGE_MARGIN = 0.4      # mm, inset of the wall on silhouette (non-fold) edges
-TOP_MARGIN = 1.0            # mm, extra inset there at the top -- cosmetic taper
 OVERLAP = 0.3               # mm, frustum foot embedded INTO the base (touching-but-
                             # not-overlapping solids are ambiguous for mesh booleans)
 
@@ -199,19 +197,41 @@ for _a in set(FOLD_ANGLES.values()):
             f"{2 * math.degrees(_top):.2f} deg -- the fold would jam early")
 
 
-def free_margin(z):
-    frac = (z - FOOT_Z) / (TOP_Z - FOOT_Z)
-    return FREE_EDGE_MARGIN + frac * TOP_MARGIN
+def seam_margin(z, miter):
+    """The same miter, for an edge of the net that is NOT a fold: one of the
+    Hamiltonian cycle's edges, where this cap meets the OTHER one.
+
+    Every free edge of a cap's net is a seam edge -- that is the theorem the
+    whole project rests on, cut edges = V -- so this is the mating face of the
+    finished object, and it has to be the bisector of the two faces that meet
+    there, exactly as a fold does. The one difference is where the miter is
+    measured from. A fold pivots about the middle of its hinge because the
+    sheet bends there; a seam does not bend at all. The two caps are rigid
+    bodies brought together, touching first at the outer skin, so the bisector
+    passes through the edge on the OUTER SURFACE and the miter is measured
+    from z = 0.
+
+    This was a plain inward taper before -- 0.4mm at the foot to 1.4mm at the
+    top -- a number with no relation to the angle the caps meet at. It left
+    the cube's two caps overlapping by 2.7mm of solid at the rim, and the
+    base, extruded straight out to the paper outline below it, standing proud
+    of the rim by up to 1.2 x miter. So the caps met base-ledge to base-ledge
+    and the rims never touched at all.
+    """
+    return CONTACT_CLEARANCE + z * miter
 
 
-def margins_at(z, miters):
-    return [free_margin(z) if m is None else wall_margin(z, m) for m in miters]
+def margins_at(z, edges):
+    """`edges` is one (is_fold, miter) per side of the face, in order."""
+    return [wall_margin(z, m) if fold else seam_margin(z, m) for fold, m in edges]
 
 
 def offset_polygon_per_edge(pts2d, margins):
     """Move each edge inward by its OWN margin and re-intersect consecutive
     edges. A uniform centroid-scale cannot do this, and the whole design needs
-    it: fold edges taper with height (the miter) while free edges do not."""
+    it: every edge tapers with height, but about its own angle and its own
+    pivot -- a fold about the middle of its hinge, a seam about the outer
+    skin."""
     n = len(pts2d)
     cx = sum(p[0] for p in pts2d) / n
     cy = sum(p[1] for p in pts2d) / n
@@ -252,14 +272,14 @@ def raised_frustum(pts2d, global_verts, fold_edges):
     with a knee in it. The margin is convex in z (the slope only increases),
     so the convex hull of the three rings is exactly the intended solid."""
     n = len(pts2d)
-    miters = []
+    edges = []
     for k in range(n):
         e = edge_key(global_verts[k], global_verts[(k + 1) % n])
-        miters.append(miter_of(e) if e in fold_edges else None)
-    knees = sorted({relief_knee(m) for m in miters if m is not None} or {FOOT_Z})
+        edges.append((e in fold_edges, miter_of(e)))
+    knees = sorted({relief_knee(m) for fold, m in edges if fold} or {FOOT_Z})
     verts = []
     for z in [FOOT_Z] + knees + [TOP_Z]:
-        ring = offset_polygon_per_edge(pts2d, margins_at(z, miters))
+        ring = offset_polygon_per_edge(pts2d, margins_at(z, edges))
         assert inradius(ring) > 0.2, (
             f"the wall insets have eaten this face at TARGET_EDGE={TARGET_EDGE}mm "
             f"(top inradius {inradius(ring):.2f}mm) -- the model is too small")
@@ -303,6 +323,39 @@ def hinge_trench(pa, pb, miter):
                           HINGE_THICKNESS + (depth + 1.0) / 2])
 
 
+def seam_cut(pa, pb, miter):
+    """The wedge to take off the base along one seam edge.
+
+    The rim above is shaped ring by ring, but the base under it is one flat
+    extrusion of the whole net outline, so at a seam it runs straight out to
+    the paper edge and stands proud of the rim by up to FACE_THICKNESS x
+    miter. That ledge is what met the other cap instead of the mating face.
+
+    So cut the base back to the same bisector plane. A half-space does it:
+    rotating a box about the edge by -atan(miter) lays its face on the plane
+    y = CONTACT_CLEARANCE + z x miter, and everything outside is removed. The
+    box is no deeper than the wedge it has to reach (the plane's distance to
+    the far corner of the material) so it cannot reach across the net to some
+    other part of a strip that bends back on itself, and it runs past both
+    ends of the edge by that same depth so the two planes meeting at a corner
+    of the solid leave no sliver between them.
+    """
+    ax, ay = pa
+    bx, by = pb
+    depth = (CONTACT_CLEARANCE + TOP_Z * miter) / math.hypot(1.0, miter) + 0.5
+    length = math.hypot(bx - ax, by - ay) + 2 * depth
+    tall = 4 * TOP_Z + 8
+    box = m3d.Manifold.cube([length, depth, tall], True)
+    box = box.translate([0, -depth / 2, 0])          # its y=0 face is the plane
+    box = box.rotate([-math.degrees(math.atan(miter)), 0, 0])
+    box = box.translate([0, CONTACT_CLEARANCE, 0])
+
+    # the face's own side of the edge is +y before this turn, so point the cut
+    # the other way if the edge runs the other way round
+    box = box.rotate([0, 0, math.degrees(math.atan2(by - ay, bx - ax))])
+    return box.translate([(ax + bx) / 2, (ay + by) / 2, 0])
+
+
 def build_strip(path, edge_len=TARGET_EDGE):
     face_2d = unfold(SOLID, path, edge_len)
     fold_edges = compute_fold_edges(SOLID.faces, path)
@@ -326,7 +379,30 @@ def build_strip(path, edge_len=TARGET_EDGE):
         raised_frustum([p for _, p in face_2d[fi]], [gv for gv, _ in face_2d[fi]], fold_edges)
         for fi in path
     ]
-    return m3d.Manifold.batch_boolean([base] + frustums, m3d.OpType.Add), face_2d
+    solid = m3d.Manifold.batch_boolean([base] + frustums, m3d.OpType.Add)
+
+    # Every edge of the net that is not a fold is a seam: miter it, base and
+    # all, so the two caps meet on the bisector instead of on a square ledge.
+    cuts = []
+    for fi in path:
+        pts = dict(face_2d[fi])
+        face = SOLID.faces[fi]
+        centre = np.mean([q for _, q in face_2d[fi]], axis=0)
+        for k in range(len(face)):
+            a, b = face[k], face[(k + 1) % len(face)]
+            e = edge_key(a, b)
+            if e in fold_edges:
+                continue
+            pa, pb = pts[a], pts[b]
+            # the cut is built with the material on its +y side, which means
+            # the edge has to run with the face on the left
+            nrm = (-(pb[1] - pa[1]), pb[0] - pa[0])
+            if nrm[0] * (centre[0] - pa[0]) + nrm[1] * (centre[1] - pa[1]) < 0:
+                pa, pb = pb, pa
+            cuts.append(seam_cut(pa, pb, miter_of(e)))
+    if cuts:
+        solid -= m3d.Manifold.batch_boolean(cuts, m3d.OpType.Add)
+    return solid, face_2d
 
 
 def export_stl(manifold_obj, path_out):
@@ -385,26 +461,24 @@ def ray_hits_segment(origin, direction, a, b):
     return t if t > 1e-9 and -1e-9 <= sseg <= 1 + 1e-9 else None
 
 
-def measure_wall_profile(solid, face_2d, path, samples=25):
-    """Read the wall face back off the FINISHED mesh, so the CSG is checked
-    against the design rather than trusted. Slices the solid at a series of
-    heights and measures how far the material starts from the fold line --
-    sampling the surface itself, not just the few heights that happen to
-    carry mesh vertices."""
-    i = min(len(path) // 2, len(path) - 2)     # a 2-face strip has only one seam
-    va, vb = shared_verts(SOLID.faces, path[i], path[i + 1])
-    pts = dict(face_2d[path[i]])
+def edge_profile(solid, face_2d, fi, va, vb, z_lo, z_hi, samples=25):
+    """Read the face that an edge carries back off the FINISHED mesh, so the
+    CSG is checked against the design rather than trusted. Slices the solid at
+    a series of heights and measures how far the material starts from the edge
+    -- sampling the surface itself, not just the few heights that happen to
+    carry mesh vertices, which is what made an earlier version of this read
+    14mm wrong: a wall face runs parallel to its own edge, so its only
+    vertices are at the far corners of the face."""
+    pts = dict(face_2d[fi])
     pa, pb = np.array(pts[va]), np.array(pts[vb])
-    mid, span = (pa + pb) / 2, np.linalg.norm(pb - pa)
-    u = (pb - pa) / span
+    mid = (pa + pb) / 2
+    u = (pb - pa) / np.linalg.norm(pb - pa)
     nrm = np.array([-u[1], u[0]])
-    # which side of the fold line this face lies on
-    face_centre = np.mean([q for _, q in face_2d[path[i]]], axis=0)
-    if np.dot(nrm, face_centre - mid) < 0:
-        nrm = -nrm
+    if np.dot(nrm, np.mean([q for _, q in face_2d[fi]], axis=0) - mid) < 0:
+        nrm = -nrm                      # point into the face
 
     out = []
-    for z in np.linspace(FACE_THICKNESS + 0.05, TOP_Z - 0.05, samples):
+    for z in np.linspace(z_lo, z_hi, samples):
         hits = []
         for poly in solid.slice(float(z)).to_polygons():
             q = np.asarray(poly)
@@ -415,6 +489,18 @@ def measure_wall_profile(solid, face_2d, path, samples=25):
         if hits:
             out.append((z, min(hits)))
     return out
+
+
+def a_seam_edge(path, fold_edges, face_2d):
+    """Any edge of the net that is not a fold -- which is to say any edge of
+    the Hamiltonian cycle, since those are the only ones left."""
+    for fi in path:
+        face = SOLID.faces[fi]
+        for k in range(len(face)):
+            a, b = face[k], face[(k + 1) % len(face)]
+            if edge_key(a, b) not in fold_edges:
+                return fi, a, b
+    raise AssertionError("a cap with no seam edge is not a cap")
 
 
 if __name__ == "__main__":
@@ -481,13 +567,28 @@ if __name__ == "__main__":
         f"arithmetic, so they are genuinely not the same part")
 
     solid, face_2d, path = solids[0]
-    i = min(len(path) // 2, len(path) - 2)
-    seam = edge_key(*shared_verts(SOLID.faces, path[i], path[i + 1]))
-    knee = relief_knee(miter_of(seam))
-    worst = max(abs(m - wall_margin(z, miter_of(seam))) for z, m in
-                measure_wall_profile(solid, face_2d, path) if z > knee + 0.2)
+    i = min(len(path) // 2, len(path) - 2)     # a 2-face strip has only one fold
+    va, vb = shared_verts(SOLID.faces, path[i], path[i + 1])
+    fold = miter_of(edge_key(va, vb))
+    knee = relief_knee(fold)
+    worst = max(abs(m - wall_margin(z, fold)) for z, m in
+                edge_profile(solid, face_2d, path[i], va, vb,
+                             FACE_THICKNESS + 0.05, TOP_Z - 0.05) if z > knee + 0.2)
     print(f"wall face measured off the finished mesh matches the design to {worst:.4f}mm")
     assert worst < 0.05, "the printed wall is not where the design says it is"
+
+    # And the mating face, over its WHOLE height -- the base included, which
+    # is where it used to run straight out to the paper outline and stop the
+    # two caps ever touching along their rims.
+    fold_edges = compute_fold_edges(SOLID.faces, path)
+    sf, sa, sb = a_seam_edge(path, fold_edges, face_2d)
+    seam_m = miter_of(edge_key(sa, sb))
+    worst = max(abs(m - seam_margin(z, seam_m)) for z, m in
+                edge_profile(solid, face_2d, sf, sa, sb, 0.05, TOP_Z - 0.05, 60))
+    print(f"seam face is the bisector of a {FOLD_ANGLES[edge_key(sa, sb)]:.2f} deg "
+          f"joint to {worst:.4f}mm, all the way down to the outer skin")
+    assert worst < 0.02, (
+        "the seam is not on the bisector -- the two caps will not close on it")
 
     name = SOLID.name.split()[-1].lower()
     out = f"hardware/tests/flat_strip_{name}_{TARGET_SIZE:g}mm.stl"
