@@ -99,7 +99,13 @@ OVERLAP = 0.3               # mm, frustum foot embedded INTO the base (touching-
 FOLD_ANGLES = SOLID.fold_angles()
 
 PIVOT_Z = HINGE_THICKNESS / 2        # the sheet bends about the middle of the thinned band
-FOOT_Z = FACE_THICKNESS - OVERLAP
+# The wall starts at the HINGE band, not at the top of the face. Starting it
+# higher leaves the stretch between them with nothing but the trench wall,
+# which is cut to the trench's full width, so the boundary sat proud there and
+# then stepped inward when the wall finally began -- an undercut, 0.02mm on the
+# icosahedron and 0.29mm on the cube. Beginning at the hinge means the profile
+# is wall_margin(z) the whole way up, with no step to print over.
+FOOT_Z = HINGE_THICKNESS - OVERLAP
 TOP_Z = FACE_THICKNESS + WALL_HEIGHT
 
 assert 0 < HINGE_THICKNESS <= FACE_THICKNESS, "hinge cannot be thicker than the face"
