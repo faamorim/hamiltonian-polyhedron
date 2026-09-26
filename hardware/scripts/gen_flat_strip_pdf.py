@@ -55,11 +55,9 @@ from shapely.ops import unary_union
 
 from polyhedra import SOLIDS, unfold, compute_fold_edges, edge_key, net_alignment_deg
 
-# Landscape US Letter -- swap for (297, 210) for landscape A4.
-PAGE_W_MM, PAGE_H_MM = 279.4, 215.9
-MM_PER_INCH = 25.4
-MARGIN_MM = 10    # safe margin on all sides (most printers can't print edge-to-edge)
-HEADER_MM = 15    # vertical space reserved for the title at the top
+from pdf_page import (PAGE_W_MM, PAGE_H_MM, MM_PER_INCH, MARGIN_MM, HEADER_MM,
+                      draw_scale_bar)
+
 CUT_GAP_MM = 3.0  # minimum real clearance wanted between the two cut outlines
 
 # Every solid is drawn at whatever edge length gives it this mean width -- the
@@ -67,9 +65,14 @@ CUT_GAP_MM = 3.0  # minimum real clearance wanted between the two cut outlines
 # look the same size sitting next to each other. Matching bounding spheres
 # instead would make the spiky ones look small (most of the sphere is void);
 # matching volume would make them look huge. Mean width is the measure between,
-# and it is what a hand judges. The figure is the icosahedron at 44.7mm edges,
-# which is what fits its page.
-TARGET_MEAN_WIDTH_MM = 77.87
+# and it is what a hand judges.
+#
+# The figure is the largest that fits EVERY solid, so no solid is capped by
+# its page and drawn smaller than the rest. On this page the binding one is
+# the d10, whose page limit is 57.6mm edges = 76.44mm of mean width; the
+# icosahedron would allow 76.65 and the cube 104.40. Re-derive it by setting
+# this absurdly high and reading each solid's "the page allows up to" line.
+TARGET_MEAN_WIDTH_MM = 76.40
 
 
 def net_bbox(path, face_2d):
@@ -423,6 +426,7 @@ if __name__ == "__main__":
     ax.text(PAGE_W_MM / 2, PAGE_H_MM - 15,
             f"Hamiltonian Polyhedron - {solid.name}",
             ha="center", fontsize=11, weight="bold")
+    draw_scale_bar(ax)
 
     out = f"hardware/tests/flat_strip_template_{name}.pdf"
     with PdfPages(out) as pdf:

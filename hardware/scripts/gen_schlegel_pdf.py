@@ -59,11 +59,9 @@ import numpy as np
 from matplotlib.backends.backend_pdf import PdfPages
 
 from polyhedra import SOLIDS, face_edges
+from pdf_page import PAGE_W_MM, PAGE_H_MM, MM_PER_INCH, MARGIN_MM, draw_scale_bar
 
-PAGE_W_MM, PAGE_H_MM = 279.4, 215.9
-MM_PER_INCH = 25.4
-MARGIN_MM = 10     # safe margin on all sides (most printers can't print edge-to-edge)
-HEADER_MM = 26     # vertical space reserved for the title block at the top
+HEADER_MM = 26     # taller than the strip template's: this one has a subtitle
 
 VIEW_FACE = 0      # which face we look in through; it becomes the outer outline
 VERTEX_R_MM = 2.6  # radius of the circle drawn at each vertex
@@ -322,6 +320,7 @@ if __name__ == "__main__":
         ax.add_patch(plt.Circle((x, y), VERTEX_R_MM, **VERTEX_STYLE))
     ax.text(PAGE_W_MM / 2, PAGE_H_MM - 15, f"Hamiltonian Polyhedron - {solid.name}",
             ha="center", fontsize=11, weight="bold")
+    draw_scale_bar(ax)
     ax.text(PAGE_W_MM / 2, PAGE_H_MM - 21, "Schlegel Diagram",
             ha="center", fontsize=9, style="italic", color="0.3")
 
