@@ -41,9 +41,22 @@ TARGET_MEAN_WIDTH_MM = 77.87  # the figure the fold-up nets are sized to, so a
                               # printed set all reads as the same size
 TRUNCATE_FRAC = 0.12          # cut each edge back by this much of its length at
                               # each end; sets how big the tack flats come out
-PEG_HOLE_DIA = 0.0            # 0 leaves the flats solid. Set it to your tack's
-PEG_HOLE_DEPTH = 8.0          # shank plus clearance once you have measured one.
-SEAM_KEY_DIA = 0.0            # likewise for alignment pins across the seam
+# A cone in the middle of each flat, purely so the tack point has somewhere to
+# start instead of skating off a sloped face. It is a centre punch and nothing
+# more -- driven or heat-set, the shank's grip comes from the material around
+# it, and a dimple this size adds no strength worth counting.
+#
+# Deeper and narrower prints better than shallow and wide, which is the wrong
+# way round from intuition: the cone widens as it rises, so its wall is an
+# overhang at atan(radius / depth) from vertical. At 1.6 x 1.0mm that is 38.7
+# degrees, comfortably inside what prints clean; flattening it to 1.6 x 0.4
+# would make it 63 degrees and come out rough.
+DIMPLE_DIA = 1.6              # mm across where it meets the flat
+DIMPLE_DEPTH = 1.0            # mm to the point
+DIMPLE_PROUD = 0.2            # mm the cut is carried past the surface, so the
+                              # boolean never has to resolve a tangent face
+
+SEAM_KEY_DIA = 0.0            # alignment pins across the seam, if ever wanted
 
 BIG = 1e3                     # half-space boxes, comfortably larger than the part
 
@@ -113,6 +126,30 @@ def worst_overhang(part):
     down = (n[:, 2] < -1e-9) & ~on_bed
     lean = np.degrees(np.arcsin(np.clip(-n[down, 2], 0, 1))) if down.any() else np.array([0.0])
     return float(lean.max()), float(area[down].sum())
+
+
+def flat_distance(verts, edges, v, frac):
+    """How far vertex v's flat sits from the centre, along that vertex's own
+    outward direction."""
+    r = verts[v] / np.linalg.norm(verts[v])
+    return float(flat_points(verts, edges, v, frac)[0] @ r)
+
+
+def dimple(direction, surface, dia, depth, proud):
+    """A cone sunk into one flat, apex inward, carried slightly past the face."""
+    d = np.asarray(direction, float) / np.linalg.norm(direction)
+    height = depth + proud
+    cone = m3d.Manifold.cylinder(height, 0.0, (dia / 2) * height / depth, 64, False)
+    rot = rotation_taking(d).T            # takes +Z onto this flat's outward normal
+    shift = (d * (surface - depth)).reshape(3, 1)
+    return cone.transform(np.hstack([rot, shift]).astype(np.float32))
+
+
+def with_dimples(whole, verts, edges, frac):
+    cones = [dimple(verts[v], flat_distance(verts, edges, v, frac),
+                    DIMPLE_DIA, DIMPLE_DEPTH, DIMPLE_PROUD)
+             for v in range(len(verts))]
+    return whole - m3d.Manifold.batch_boolean(cones, m3d.OpType.Add)
 
 
 def best_cut(solid, whole, verts, edges, frac):
@@ -194,12 +231,27 @@ if __name__ == "__main__":
     print(f"  vertices cut back {TRUNCATE_FRAC * 100:.0f}% of an edge -> "
           f"{len(verts)} flats, {min(flats):.1f}-{max(flats):.1f}mm across")
 
+
+    # The cut is chosen on the plain solid. Dimpling first would have the
+    # search judging 1.6mm cone facets instead of the faces that actually
+    # decide print quality, and it picks a worse axis when it does.
     worst, z, down_area = best_cut(solid, whole, verts, edges, TRUNCATE_FRAC)
     assert not splits_a_flat(verts, edges, z, TRUNCATE_FRAC)
     print(f"  cut chosen from {len(verts) + len(edges) + len(solid.faces)} symmetry "
           f"directions: worst overhang {worst:.1f} deg over {down_area:.0f}mm2, "
           f"no tack flat split")
     assert worst < 45.0, f"worst overhang {worst:.1f} deg needs support"
+
+    plain_volume = whole.volume()
+    whole = with_dimples(whole, verts, edges, TRUNCATE_FRAC)
+    cut_away = plain_volume - whole.volume()
+    ideal = len(verts) * math.pi * (DIMPLE_DIA / 2) ** 2 * DIMPLE_DEPTH / 3
+    assert abs(cut_away - ideal) < 0.05 * ideal, (
+        f"the dimples removed {cut_away:.3f}mm3, not the {ideal:.3f}mm3 that "
+        f"{len(verts)} cones of that size should")
+    print(f"  centring dimple {DIMPLE_DIA:.1f} x {DIMPLE_DEPTH:.1f}mm in each flat "
+          f"({math.degrees(math.atan2(DIMPLE_DIA / 2, DIMPLE_DEPTH)):.1f} deg wall, "
+          f"{cut_away:.2f}mm3 removed in all)")
 
     upper = half(whole, z, True)
     lower = half(whole, z, False)
@@ -238,13 +290,15 @@ if __name__ == "__main__":
     from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
     BG = "#f7f7f5"
-    fig = plt.figure(figsize=(13.5, 5.2), facecolor=BG)
-    views = [(26, -60, "as it prints, cut face down"),
-             (6, -60, "from the side"),
-             (78, -60, "from above")]
+    fig = plt.figure(figsize=(17, 5.0), facecolor=BG)
+    views = [(26, -60, "as it prints, cut face down", None),
+             (6, -60, "from the side", None),
+             (78, -60, "from above", None),
+             (34, -60, "one flat, close up", 9.0)]
     t = mesh_faces(upper)
-    for k, (elev, azim, title) in enumerate(views):
-        ax = fig.add_subplot(1, 3, k + 1, projection="3d", facecolor=BG)
+    apex = t.reshape(-1, 3)[np.argmax(t.reshape(-1, 3)[:, 2])]
+    for k, (elev, azim, title, zoom) in enumerate(views):
+        ax = fig.add_subplot(1, 4, k + 1, projection="3d", facecolor=BG)
         ax.set_proj_type("ortho")
         nrm = np.cross(t[:, 1] - t[:, 0], t[:, 2] - t[:, 0])
         nrm /= np.maximum(np.linalg.norm(nrm, axis=1), 1e-12)[:, None]
@@ -256,6 +310,8 @@ if __name__ == "__main__":
                                              linewidths=0.25))
         p = t.reshape(-1, 3)
         lo, hi = p.min(0), p.max(0)
+        if zoom is not None:
+            lo, hi = apex - zoom, apex + zoom
         for setter, a, b in ((ax.set_xlim, lo[0], hi[0]), (ax.set_ylim, lo[1], hi[1]),
                              (ax.set_zlim, lo[2], hi[2])):
             setter(a, b)
@@ -263,9 +319,9 @@ if __name__ == "__main__":
         ax.view_init(elev=elev, azim=azim)
         ax.set_axis_off()
         ax.set_title(title, fontsize=9, color="0.28", pad=0)
-    fig.suptitle(f"{solid.name} — half with flattened vertices, "
-                 f"{across:.0f}mm across, {len(verts)} tack flats "
-                 f"{min(flats):.1f}–{max(flats):.1f}mm",
+    fig.suptitle(f"{solid.name} — half with flattened vertices, {across:.0f}mm across, "
+                 f"{len(verts)} tack flats {min(flats):.1f}mm wide, each with a "
+                 f"{DIMPLE_DIA:.1f} × {DIMPLE_DEPTH:.1f}mm centring dimple",
                  fontsize=11.5, color="0.15")
     fig.tight_layout(rect=[0, 0, 1, 0.93])
     png = f"hardware/tests/peg_half_{name}.png"

@@ -92,6 +92,16 @@
     border-radius:3px; padding:1px 5px; margin-left:8px;
   }
   #downloads .none{ font-size:0.78rem; }
+  #downloads .sizeRow{
+    display:flex; align-items:center; gap:8px;
+    margin:0 0 6px; font-size:0.74rem; color:var(--text-dim);
+  }
+  #downloads .sizeRow select{
+    flex:1; background:#161926; color:var(--text);
+    border:1px solid var(--panel-border); border-radius:5px;
+    padding:4px 6px; font:inherit; font-size:0.76rem;
+  }
+  #downloads .sizeRow select:hover{ border-color:var(--accent); }
   #credit{
     margin-top:14px; padding-top:14px; border-top:1px solid var(--panel-border);
     font-size:0.78rem; color:var(--text-dim); line-height:1.5;
@@ -454,6 +464,20 @@
     return a;
   }
 
+  // Size is the solid's PERCEIVED size -- its mean width, the average caliper
+  // reading over every orientation -- so one setting means the same physical
+  // object whichever shape you pick, and it is remembered across shapes.
+  var stlSize = null;
+
+  function pickRung(d){
+    var chosen = null, fallback = null;
+    d.stl.sizes.forEach(function(r){
+      if (r.mm === stlSize) chosen = r;
+      if (r.mm === d.stl["default"]) fallback = r;
+    });
+    return chosen || fallback || d.stl.sizes[0];
+  }
+
   function showDownloads(key){
     downloadList.innerHTML = "";
     var all = window.DOWNLOADS || [];
@@ -467,9 +491,34 @@
       d.net.path, "PDF", "Fold-up net",
       "both strips of " + d.strip + " faces at " + d.net.edge.toFixed(1) +
       "mm edges &middot; print at 100%"));
+    var rung = pickRung(d);
+    var row = document.createElement("div");
+    row.className = "sizeRow";
+    row.appendChild(document.createTextNode("Size"));
+    var sizeSelect = document.createElement("select");
+    d.stl.sizes.forEach(function(r){
+      var o = document.createElement("option");
+      o.value = r.mm;
+      o.textContent = r.mm + "mm across" + (r.mm === d.stl["default"] ? " (default)" : "");
+      sizeSelect.appendChild(o);
+    });
+    sizeSelect.value = rung.mm;
+    sizeSelect.addEventListener("change", function(){
+      stlSize = parseFloat(sizeSelect.value);
+      showDownloads(key);
+    });
+    row.appendChild(sizeSelect);
+    downloadList.appendChild(row);
     downloadList.appendChild(fileLink(
-      d.stl.path, "STL", "3D-print strip",
-      "one part, printed twice &middot; " + d.stl.edge.toFixed(0) + "mm edges"));
+      rung.path, "STL", "3D-print strip",
+      "one part, printed twice &middot; " + rung.edge.toFixed(1) + "mm edges &middot; " +
+      "needs " + Math.ceil(rung.bed[0]) + " &times; " + Math.ceil(rung.bed[1]) + "mm of bed"));
+    var warn = document.createElement("div");
+    warn.className = "sizeRow";
+    warn.innerHTML = "Pick the size here, not in the slicer: the hinge is a fixed " +
+      "thickness in millimetres, so scaling the file scales the hinge too and it " +
+      "stops bending.";
+    downloadList.appendChild(warn);
     d.extras.forEach(function(e){
       downloadList.appendChild(fileLink(e.path, "PDF", e.label, e.note));
     });

@@ -24,7 +24,7 @@ each, and were necessarily bad at both:
     to bend also parked it a constant distance short of its neighbour, so
     the walls never met at the true fold angle -- the strip only stopped
     when the wall TOPS jammed, about 13 degrees past the target, leaving the
-    gap at the base that showed up on the first print. Now HINGE_GAP sets
+    gap at the base that showed up on the first print. Now hinge_gap sets
     the bare strip and CONTACT_CLEARANCE sets the contact face, and the
     wall takes whichever of the two is WIDER at each height, so it returns to
     the true miter plane as soon as the hinge no longer needs the room -- and
@@ -41,11 +41,19 @@ The miter is measured from the real pivot -- the middle of the THINNED
 hinge, not the top of the base -- since that is the line the sheet actually
 bends about.
 
-SCALE. TARGET_EDGE is the only dimension that scales the model; everything
-else is absolute millimetres, because the hinge is a local feature whose
-behaviour depends on the printer and filament, not on how big the
-icosahedron is. So the fold behaves identically at any size, and the script
-asserts the chosen size still leaves a sane frustum top and fits the bed.
+SCALE. The net outline is the only thing that scales with the model;
+everything else is absolute millimetres, because the hinge is a local
+feature whose behaviour depends on the printer and the filament, not on how
+big the solid is. So the fold behaves identically at any size -- and so a
+finished STL must never be scaled in a slicer, which would scale the hinge
+along with it and stop it bending. Ask for another size here instead; the
+script re-runs every check at the size it was given.
+
+Size is asked for as PERCEIVED size (mean width -- the average caliper
+reading over all orientations), not as an edge length, so that one number
+means the same physical object across the six solids. The paper nets are
+already sized this way. An edge length is not comparable: a dodecahedron of
+22mm edges is nearly three times a tetrahedron of the same.
 
 NOT YET IMPLEMENTED, deliberately -- both wanted, neither urgent:
   * recesses in the frustum floors for magnets at the seam;
@@ -72,13 +80,35 @@ from polyhedra import (SOLIDS, unfold, compute_fold_edges, shared_verts, edge_ke
 SOLID = SOLIDS[(sys.argv[1] if len(sys.argv) > 1 else "icosahedron").lower()]
 
 # --- scale ----------------------------------------------------------------
-TARGET_EDGE = 22.0          # mm; the ONLY dimension that scales with the model
+# The rungs offered on the web page. A ladder rather than a free number
+# because each size is a separate print that has to pass its own checks, and
+# the window is not wide: below the small end the wall insets eat the face,
+# above the large end the strip runs off a 180mm bed. These five sit inside
+# the window for all six solids at once, so the same rung exists everywhere.
+SIZES_MM = [25.0, 32.0, 40.0, 50.0, 63.0]      # perceived size (mean width)
+DEFAULT_SIZE_MM = 40.0
+
+TARGET_SIZE = float(sys.argv[2]) if len(sys.argv) > 2 else DEFAULT_SIZE_MM
+TARGET_EDGE = TARGET_SIZE / SOLID.mean_width()  # mm; scales the net, nothing else
 BED_MM = 180.0              # printer bed, checked against the finished strip
 
 # --- base: stiffness and flexibility, separately --------------------------
 FACE_THICKNESS = 1.2        # mm, skin under a face
 HINGE_THICKNESS = 0.6       # mm, skin in the bare strip along a fold
-HINGE_GAP = 0.8             # mm, width of that bare strip (wall foot to wall foot)
+# The bare strip has to be WIDER on a sharper fold. It curls to a radius of
+# about (its width) / (the angle), so the outer fibre is stretched by roughly
+# thickness x angle / (2 x width). Hold the width fixed and the tetrahedron's
+# 109 degree fold strains the filament two and a half times as hard as the
+# icosahedron's 42 degree one -- which is the difference between a hinge that
+# bends and one that cracks, from a number that was never about either solid.
+# Making the width proportional to the angle asks the same of every fold.
+#
+# The constant is calibrated on the fold that has actually been printed: the
+# icosahedron's, 0.80mm at 41.81 degrees, which bends easily without going
+# floppy. So that solid is unchanged and the others are brought into line
+# with it.
+HINGE_GAP_PER_RAD = 0.80 / math.radians(41.81)   # mm of bare strip per radian
+MIN_HINGE_GAP = 0.6         # mm floor -- below a nozzle width it is a crease, not a hinge
 
 # --- walls: bending relief and contact face, separately -------------------
 WALL_HEIGHT = 3.0           # mm, rim height above the face
@@ -99,7 +129,13 @@ OVERLAP = 0.3               # mm, frustum foot embedded INTO the base (touching-
 FOLD_ANGLES = SOLID.fold_angles()
 
 PIVOT_Z = HINGE_THICKNESS / 2        # the sheet bends about the middle of the thinned band
-FOOT_Z = FACE_THICKNESS - OVERLAP
+# The wall starts at the HINGE band, not at the top of the face. Starting it
+# higher leaves the stretch between them with nothing but the trench wall,
+# which is cut to the trench's full width, so the boundary sat proud there and
+# then stepped inward when the wall finally began -- an undercut, 0.02mm on the
+# icosahedron and 0.29mm on the cube. Beginning at the hinge means the profile
+# is wall_margin(z) the whole way up, with no step to print over.
+FOOT_Z = HINGE_THICKNESS - OVERLAP
 TOP_Z = FACE_THICKNESS + WALL_HEIGHT
 
 assert 0 < HINGE_THICKNESS <= FACE_THICKNESS, "hinge cannot be thicker than the face"
@@ -107,6 +143,15 @@ assert 0 < HINGE_THICKNESS <= FACE_THICKNESS, "hinge cannot be thicker than the 
 
 def miter_of(edge):
     return math.tan(math.radians(FOLD_ANGLES[edge]) / 2)
+
+
+def hinge_gap(miter):
+    """Width of the bare strip left free to flex at a fold, set by the angle
+    that fold has to close through -- which the miter already carries, being
+    the tangent of its half. Taking it from the miter rather than passing it
+    separately keeps every caller's signature as it was: everything that
+    shapes the section is a function of the fold angle and the height."""
+    return max(MIN_HINGE_GAP, HINGE_GAP_PER_RAD * 2 * math.atan(miter))
 
 
 def wall_margin(z, miter):
@@ -125,14 +170,14 @@ def wall_margin(z, miter):
     design. Anything that dips inside the miter plane lower down would touch
     sooner and jam the fold short of the angle the solid needs.
     """
-    return max(HINGE_GAP / 2, CONTACT_CLEARANCE + max(0.0, z - PIVOT_Z) * miter)
+    return max(hinge_gap(miter) / 2, CONTACT_CLEARANCE + max(0.0, z - PIVOT_Z) * miter)
 
 
 def relief_knee(miter):
     """Height at which the bare strip stops being the wider of the two and the
     wall rejoins the miter plane. Only a reporting/ring-placement convenience;
     nothing depends on it being a parameter any more."""
-    z = PIVOT_Z + (HINGE_GAP / 2 - CONTACT_CLEARANCE) / miter
+    z = PIVOT_Z + (hinge_gap(miter) / 2 - CONTACT_CLEARANCE) / miter
     return min(max(z, FOOT_Z), TOP_Z)
 
 
@@ -239,9 +284,9 @@ def hinge_trench(pa, pb, miter):
     both its endpoints on the net's outline, so a trench cut to exactly the
     edge's length ends flush with the boundary -- a degenerate coincidence that
     floating point resolves differently in the two caps, leaving one of them an
-    extra end wall of HINGE_GAP x FACE_THICKNESS. That is 0.96mm2 with these
-    numbers, which is exactly the surface-area difference it produced, and it
-    was enough to make two congruent caps fail the one-part check.
+    extra end wall of one hinge gap by FACE_THICKNESS. That was 0.96mm2 at the
+    time, which is exactly the surface-area difference it produced, and it was
+    enough to make two congruent caps fail the one-part check.
     """
     ax, ay = pa
     bx, by = pb
@@ -376,11 +421,13 @@ if __name__ == "__main__":
     paths = SOLID.strips()
     print(f"{SOLID.name}: two strips of {len(paths[0])} faces "
           f"({len(SOLID.faces[paths[0][0]])} sides each)")
-    for angle in sorted(set(FOLD_ANGLES.values())):
+    print(f"perceived size {TARGET_SIZE:.1f}mm wants edge {TARGET_EDGE:.2f}mm "
+          f"(do NOT rescale the STL afterwards -- it would rescale the hinge)")
+    for angle in sorted({round(a, 6) for a in FOLD_ANGLES.values()}):
         m = math.tan(math.radians(angle) / 2)
         print(f"  a {angle:6.2f} deg fold: contact faces meet at {stop_angle_deg(m):6.2f} deg "
-              f"({stop_angle_deg(m) - angle:+.2f}), bare strip "
-              f"{2 * wall_margin(FACE_THICKNESS, m):.2f}mm wide, wall rejoins the miter at "
+              f"({stop_angle_deg(m) - angle:+.2f}), bare strip {hinge_gap(m):.2f}mm wide in a "
+              f"{2 * wall_margin(FACE_THICKNESS, m):.2f}mm trench, wall rejoins the miter at "
               f"z={relief_knee(m):.2f}mm")
     print(f"base {FACE_THICKNESS:.2f}mm under the faces, {HINGE_THICKNESS:.2f}mm at the folds")
 
@@ -408,9 +455,16 @@ if __name__ == "__main__":
           f"{solids[1][0].surface_area():.6f}")
     turn, net_err = net_alignment_deg(solids[0][1], solids[0][2],
                                       solids[1][1], solids[1][2])
-    assert turn is not None and net_err < 1e-5, (
-        f"the two nets are not congruent (best fit off by {net_err:.4f}mm) -- "
-        f"this solid needs two different prints")
+    # Judged against the edge length, not in bare millimetres. The residual is
+    # round-off accumulated along the unfold chain, so it grows with the model
+    # -- about 4e-7mm per mm of edge on the d10 -- and an absolute threshold is
+    # a different demand at every size: the same net passed at 22mm edges and
+    # failed at 24mm. A real mismatch would be a whole feature, four orders of
+    # magnitude above this.
+    assert turn is not None and net_err < 1e-5 * TARGET_EDGE, (
+        f"the two nets are not congruent (best fit off by {net_err:.6f}mm, "
+        f"{net_err / TARGET_EDGE:.1e} of an edge) -- this solid needs two "
+        f"different prints")
     diff = congruence_error(solids[0][0], solids[1][0], turn)
     # Read the leftover volume as an average surface displacement, which is
     # both physically meaningful and independent of how big the part is: a
@@ -418,7 +472,8 @@ if __name__ == "__main__":
     # thick at the very least, while the floor here is the precision of the
     # net alignment the turn was measured from.
     skin = diff / solids[0][0].surface_area()
-    print(f"a {turn:.4f} deg turn (found on the nets to {net_err:.1e}mm) leaves "
+    print(f"a {turn:.4f} deg turn (found on the nets to "
+          f"{net_err / TARGET_EDGE:.1e} of an edge) leaves "
           f"{diff:.6f}mm3 unmatched -- {skin * 1e6:.3f} nanometres of surface, "
           f"{'ONE part, printed twice' if skin < 1e-4 else 'NOT congruent'}")
     assert skin < 1e-4, (
@@ -435,6 +490,6 @@ if __name__ == "__main__":
     assert worst < 0.05, "the printed wall is not where the design says it is"
 
     name = SOLID.name.split()[-1].lower()
-    out = f"hardware/tests/flat_strip_{name}.stl"
+    out = f"hardware/tests/flat_strip_{name}_{TARGET_SIZE:g}mm.stl"
     export_stl(solid, out)
     print(f"\nwrote {out}  (print TWO of these)")
