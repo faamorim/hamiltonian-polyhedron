@@ -123,13 +123,13 @@ if __name__ == "__main__":
     ax.axhline(G.PIVOT_Z, color="#b5651d", lw=1.0, ls=(0, (2, 2)))
     ax.text(3.9, G.PIVOT_Z + 0.06, "pivot", color="#b5651d", fontsize=7, ha="right")
     ax.axhline(G.FACE_THICKNESS, color="0.6", lw=0.7, ls=(0, (1, 2)))
-    ax.axhline(G.RELIEF_Z, color="0.6", lw=0.7, ls=(0, (1, 2)))
+    ax.axhline(G.relief_knee(miter), color="0.6", lw=0.7, ls=(0, (1, 2)))
     ax.text(3.9, G.FACE_THICKNESS + 0.06, "face top", color="0.45", fontsize=7, ha="right")
-    ax.text(3.9, G.RELIEF_Z + 0.06, "relief ends", color="0.45", fontsize=7, ha="right")
+    ax.text(3.9, G.relief_knee(miter) + 0.06, "rejoins miter", color="0.45", fontsize=7, ha="right")
 
     # where the two walls will meet once folded
     for sign in (+1, -1):
-        zc = np.linspace(G.RELIEF_Z, G.TOP_Z, 2)
+        zc = np.linspace(G.relief_knee(miter), G.TOP_Z, 2)
         ax.plot(sign * (G.CONTACT_CLEARANCE + (zc - G.PIVOT_Z) * miter), zc,
                 color="#c0392b", lw=1.4)
     ax.plot([], [], color="#c0392b", lw=1.4, label="contact face (true miter)")

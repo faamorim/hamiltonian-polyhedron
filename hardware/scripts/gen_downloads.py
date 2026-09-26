@@ -22,8 +22,7 @@ from polyhedra import SOLIDS   # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 OUT_DIR = "hardware/tests"
-EXTRAS = {"icosahedron": [("Schlegel diagram", f"{OUT_DIR}/schlegel_icosahedron.pdf",
-                          "the whole edge graph flat on one page, for tracing cycles by pencil")]}
+SCHLEGEL_NOTE = "the whole edge graph flat on one page, for tracing cycles by pencil"
 
 
 def run(script, key):
@@ -44,6 +43,7 @@ if __name__ == "__main__":
     for key, solid in SOLIDS.items():
         pdf_log = run("gen_flat_strip_pdf.py", key)
         stl_log = run("gen_flat_strip.py", key)
+        run("gen_schlegel_pdf.py", key)
 
         caps = solid.strips()
         entry = {
@@ -64,8 +64,9 @@ if __name__ == "__main__":
                 "edge": grab(stl_log, r"edge ([\d.]+)mm", float) or 22.0,
                 "turn": grab(stl_log, r"a ([\d.]+) deg turn"),
             },
-            "extras": [{"label": l, "path": p, "note": n}
-                       for l, p, n in EXTRAS.get(key, [])],
+            "extras": [{"label": "Schlegel diagram",
+                        "path": f"{OUT_DIR}/schlegel_{key}.pdf",
+                        "note": SCHLEGEL_NOTE}],
         }
         for f in [entry["net"]["path"], entry["stl"]["path"]] + [e["path"] for e in entry["extras"]]:
             assert os.path.exists(f), f"{f} was not produced"
