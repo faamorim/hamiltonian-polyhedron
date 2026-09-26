@@ -56,6 +56,7 @@ BORE_DEPTH = MAGNET_H + 0.3     # so the magnet sits just below the face
 OUTER_SKIN = 0.6                # plastic between the bore and the outer surface
 BACKING = 0.6                   # plastic behind the bottom of the bore
 TEARDROP_VENT = 0.4             # mm the teardrop's tip runs PAST the inner surface
+BORE_PROUD = 0.3                # mm the cutter starts OUTSIDE the mating face
 
 TILE_LEN = 44.0                 # mm along the seam
 TILE_DEEP = 16.0                # mm back from it, into the face
@@ -136,7 +137,15 @@ def bore(miter, face_w, along, teardrop):
         apex = m3d.CrossSection.square([0.02, 0.02], True)
         section = m3d.CrossSection.batch_hull(
             [section, apex.translate([0.0, -teardrop_apex(r)])])
-    body = m3d.Manifold.extrude(section, BORE_DEPTH)
+    # Start the cutter BORE_PROUD outside the face rather than exactly on it.
+    # A cutter whose end lands flush with the surface it cuts is a coplanar
+    # boolean, and what comes back is combinatorially sound but geometrically
+    # junk: the face keeps triangles that run straight across the hole. It
+    # webbed 431 of 540 probe points inside the round bore's mouth, and put
+    # 831 triangles on a rectangle with four holes in it. Same rule as
+    # OVERLAP and TRENCH_OVERSHOOT next door, which exist for exactly this.
+    body = m3d.Manifold.extrude(section, BORE_DEPTH + BORE_PROUD)
+    body = body.translate([0, 0, -BORE_PROUD])
     body = body.rotate([math.degrees(math.atan2(-1.0, -miter)), 0, 0])
 
     s = math.hypot(1.0, miter)
@@ -180,6 +189,51 @@ def partner(tile, miter):
     return (tile.translate([0, -c, 0])
                 .transform(np.hstack([R, np.zeros((3, 1))]))
                 .translate([0, c, 0]))
+
+
+def face_webbing(tile, miter, face_w, mouths):
+    """How much of each bore's mouth the mating face has been triangulated
+    OVER. Should be none: a hole is a hole.
+
+    Worth checking every build rather than trusting the kernel, because a
+    coplanar boolean fails in a way nothing else here would catch -- the mesh
+    stays closed, 2-manifold and consistently wound, every edge paired, and
+    the seam still measures exactly right. It is only wrong where nothing was
+    looking: triangles of the face lying across the opening. They show up in
+    a slicer as a web over the hole, and would print as one.
+    """
+    sec = math.hypot(1.0, miter)
+    n = np.array([0.0, 1.0 / sec, -miter / sec])
+    e1 = np.array([1.0, 0.0, 0.0])
+    e2 = np.cross(n, e1)
+
+    mesh = tile.to_mesh()
+    v = np.asarray(mesh.vert_properties)[:, :3]
+    tri = v[np.asarray(mesh.tri_verts)]
+    off = (tri[:, :, 1] - miter * tri[:, :, 2] - G.CONTACT_CLEARANCE) / sec
+    face = tri[(np.abs(off) < 1e-6).all(axis=1)]
+    P = np.stack([face @ e1, face @ e2], axis=-1)
+
+    def covered(p):
+        a, b, c = P[:, 0], P[:, 1], P[:, 2]
+        d = (b[:, 1] - c[:, 1]) * (a[:, 0] - c[:, 0]) + (c[:, 0] - b[:, 0]) * (a[:, 1] - c[:, 1])
+        ok = np.abs(d) > 1e-12
+        l1 = np.where(ok, ((b[:, 1] - c[:, 1]) * (p[0] - c[:, 0])
+                           + (c[:, 0] - b[:, 0]) * (p[1] - c[:, 1])) / np.where(ok, d, 1), -1)
+        l2 = np.where(ok, ((c[:, 1] - a[:, 1]) * (p[0] - c[:, 0])
+                           + (a[:, 0] - c[:, 0]) * (p[1] - c[:, 1])) / np.where(ok, d, 1), -1)
+        return bool(np.any((l1 > 1e-9) & (l2 > 1e-9) & (1 - l1 - l2 > 1e-9)))
+
+    hits = probes = 0
+    for m3 in mouths:
+        m2 = np.array([m3 @ e1, m3 @ e2])
+        for k in range(120):
+            th = 2 * math.pi * k / 120
+            for frac in (0.35, 0.6, 0.85):
+                probes += 1
+                hits += covered(m2 + frac * (BORE_DIA / 2)
+                                * np.array([math.cos(th), math.sin(th)]))
+    return hits, probes, len(face)
 
 
 def seam_error(tile, miter):
@@ -245,6 +299,16 @@ if __name__ == "__main__":
     print(f"  mating face measured off the mesh: on the bisector to {err * 1000:.1f} um, "
           f"one shell, {2 * tile.volume() / 1000:.1f}cm3 of filament for the pair")
     print(f"  the pair closes with nothing of either inside the other")
+
+    sec = math.hypot(1.0, miter)
+    mouths = [np.array([x, G.CONTACT_CLEARANCE + t * miter / sec, t / sec])
+              for x in (-ROUND_AT, ROUND_AT, -TEARDROP_AT, TEARDROP_AT)]
+    webbed, probes, n_face = face_webbing(tile, miter, face_w, mouths)
+    print(f"  bore mouths open: {probes - webbed}/{probes} probe points clear, "
+          f"{n_face} triangles on the mating face")
+    assert webbed == 0, (
+        f"{webbed} of {probes} points inside the bore mouths are covered by a "
+        f"triangle of the mating face -- the holes are webbed over")
 
     out = f"hardware/tests/seam_test_{name.split()[-1].lower()}.stl"
     G.export_stl(tile, out)
