@@ -33,6 +33,11 @@ Three questions in one print:
      flat overhang anywhere. If the round one comes out clean, the teardrop
      is not worth having.
 
+     Nothing is glued. The bore is a press fit, and behind each one is a
+     2mm pin hole up from the bed, so a magnet pushes straight back out with
+     a paperclip and the tile can be tried again. That hole is on the test
+     tile only -- on a real strip the bed side is the outside of the model.
+
   3. Is the pull right? A 4x2 N42 pair nearly touching runs about 4-5N, and
      the finished solid would have one pair per seam edge, or half that if
      they alternate. Two pairs here is a direct sample: if two feel about
@@ -57,6 +62,7 @@ OUTER_SKIN = 0.6                # plastic between the bore and the outer surface
 BACKING = 0.6                   # plastic behind the bottom of the bore
 TEARDROP_VENT = 0.4             # mm the teardrop's tip runs PAST the inner surface
 BORE_PROUD = 0.3                # mm the cutter starts OUTSIDE the mating face
+EJECT_DIA = 2.0                 # mm, the pin hole behind each bore -- TEST ONLY
 
 TILE_LEN = 44.0                 # mm along the seam
 TILE_DEEP = 16.0                # mm back from it, into the face
@@ -153,6 +159,31 @@ def bore(miter, face_w, along, teardrop):
     return body.translate([along, G.CONTACT_CLEARANCE + t * miter / s, t / s])
 
 
+def eject_hole(miter, face_w, along):
+    """A pin hole from the bed up into the back of one bore, so a pressed-in
+    magnet can be pushed straight out again with a paperclip.
+
+    This is on the TEST tile only and must never reach the strips: there the
+    bed side is the outside of the finished polyhedron, and a hole in it is a
+    hole in the model. Here it is what makes the test repeatable -- a 4.0mm
+    magnet in a 4.15mm bore is a press fit before the printer's own undersize
+    is counted, so without this the first magnet in is the last thing that
+    happens to the tile. Nothing needs gluing, and nothing needs to be
+    decided before the magnets can come back out.
+
+    Vertical rather than following the bore, because a vertical hole has no
+    overhang at all and is a third the length.
+    """
+    sec = math.hypot(1.0, miter)
+    t = bore_centre_t(miter, face_w)
+    # centre of the bore's far end, where the pin has to arrive
+    end_z = t / sec - BORE_DEPTH * miter / sec
+    pin = m3d.Manifold.cylinder(end_z + 0.6, EJECT_DIA / 2, EJECT_DIA / 2, SEG)
+    return pin.translate([along,
+                          G.CONTACT_CLEARANCE + t * miter / sec + BORE_DEPTH / sec,
+                          -0.3])
+
+
 def build_tile():
     angles = sorted({round(a, 6) for a in G.FOLD_ANGLES.values()})
     miters = [math.tan(math.radians(a) / 2) for a in angles]
@@ -168,9 +199,11 @@ def build_tile():
     tile = m3d.Manifold.cube([TILE_LEN, TILE_DEEP, G.TOP_Z], False)
     tile = tile.translate([-TILE_LEN / 2, 0, 0])
     tile -= G.seam_cut((-TILE_LEN, 0.0), (TILE_LEN, 0.0), miter)
+    xs = (-ROUND_AT, ROUND_AT, -TEARDROP_AT, TEARDROP_AT)
     tile -= m3d.Manifold.batch_boolean(
-        [bore(miter, face_w, x, False) for x in (-ROUND_AT, ROUND_AT)]
-        + [bore(miter, face_w, x, True) for x in (-TEARDROP_AT, TEARDROP_AT)],
+        [bore(miter, face_w, x, False) for x in xs[:2]]
+        + [bore(miter, face_w, x, True) for x in xs[2:]]
+        + [eject_hole(miter, face_w, x) for x in xs],
         m3d.OpType.Add)
     return tile, ang, miter, face_w
 
@@ -303,6 +336,14 @@ if __name__ == "__main__":
     sec = math.hypot(1.0, miter)
     mouths = [np.array([x, G.CONTACT_CLEARANCE + t * miter / sec, t / sec])
               for x in (-ROUND_AT, ROUND_AT, -TEARDROP_AT, TEARDROP_AT)]
+    end_z = t / sec - BORE_DEPTH * miter / sec
+    y_end = G.CONTACT_CLEARANCE + t * miter / sec + BORE_DEPTH / sec
+    pin_gap = (y_end - EJECT_DIA / 2 - G.CONTACT_CLEARANCE
+               - miter * (end_z + 0.3)) / sec
+    print(f"  pin hole from the bed arrives at z={end_z:.2f}mm, the back of the "
+          f"bore, clearing the mating face by {pin_gap:.2f}mm")
+    assert pin_gap > 0.4, "the pin hole breaks out onto the mating face"
+
     webbed, probes, n_face = face_webbing(tile, miter, face_w, mouths)
     print(f"  bore mouths open: {probes - webbed}/{probes} probe points clear, "
           f"{n_face} triangles on the mating face")
