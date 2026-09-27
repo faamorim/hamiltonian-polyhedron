@@ -350,6 +350,7 @@ LID_GAP = 0.15              # mm clearance round the lid
 LID_MARGIN = 1.2            # mm of rebate around the channel's mouth
 REBATE_WALL = 0.8           # mm the rebate must leave to the mating face
 SOCKET_MARGIN = 1.3         # mm of face around the socket, before a fold
+PRISM_SLOP = 0.05           # mm a seam cutter may overrun its own face by
 
 SOCKET_MIN_GAP = 0.5        # mm a socket must keep clear of a fold's miter plane
 _WANTED_KEYS, _WANTED_AT = socket_edges(SOLID)
@@ -540,10 +541,10 @@ def seam_cut(pa, pb, miter, up_to=None):
     rotating a box about the edge by -atan(miter) lays its face on the plane
     y = CONTACT_CLEARANCE + z x miter, and everything outside is removed. The
     box is no deeper than the wedge it has to reach (the plane's distance to
-    the far corner of the material) so it cannot reach across the net to some
-    other part of a strip that bends back on itself, and it runs past both
-    ends of the edge by that same depth so the two planes meeting at a corner
-    of the solid leave no sliver between them.
+    the far corner of the material), and it runs past both ends of the edge
+    by that same depth so that two cuts meeting at a corner leave no sliver
+    between them. The caller clips it to the face that owns the edge, which
+    is what keeps that overrun from reaching anywhere it has no business.
     """
     ax, ay = pa
     bx, by = pb
@@ -609,22 +610,45 @@ def build_strip(path, edge_len=TARGET_EDGE):
             nrm = (-(pb[1] - pa[1]), pb[0] - pa[0])
             if nrm[0] * (centre[0] - pa[0]) + nrm[1] * (centre[1] - pa[1]) < 0:
                 pa, pb = pb, pa
-            seams.append((e, pa, pb))
+            seams.append((e, pa, pb, fi))
 
     lids = []
-    for e, pa, pb in seams:
+    for e, pa, pb, fi in seams:
         if e in SOCKET_KEYS:
             lids.append(socket_parts(miter_of(e))[2])
+
+    # A cutter is clipped to the face that owns its edge. It has to overrun
+    # the edge's ends -- two cuts meeting at a corner would otherwise leave a
+    # sliver between them -- but past a REFLEX corner of the net, where the
+    # zigzag turns back on itself, that overrun reaches into the next face
+    # and takes a bite out of it: 41.34mm3 on the icosahedron, in two lumps
+    # at the two reflex corners. It scales with the rim, so raising the rim
+    # for the sockets made a long-standing nibble into a visible notch.
+    #
+    # Nothing was holding it up. Folding both caps with the hinge bands cut
+    # out, so that no rigidly-split hinge can collide, the face bodies of the
+    # two caps overlap by 0.000000mm3 either way -- the vertex interference
+    # that seemed to argue for the overrun was the folding's own artifact.
+    # Grown by a hair, so that two neighbouring faces' clipped cutters
+    # overlap instead of meeting exactly on the fold line between them.
+    # Sharing that wall makes them coplanar, and the union then returns nine
+    # zero-volume slivers that read as a strip in nine pieces.
+    prisms = {}
+    for fi in {f for _, _, _, f in seams}:
+        poly = m3d.CrossSection([ccw([p for _, p in face_2d[fi]])])
+        prisms[fi] = m3d.Manifold.extrude(
+            poly.offset(PRISM_SLOP, m3d.JoinType.Miter, 2.0, 0), 4 * TOP_Z + 8
+        ).translate([0, 0, -(2 * TOP_Z + 4)])
 
     # then miter every seam, base and all, so the two caps meet on the
     # bisector instead of on a square ledge
     solid -= m3d.Manifold.batch_boolean(
-        [seam_cut(pa, pb, miter_of(e)) for e, pa, pb in seams],
+        [seam_cut(pa, pb, miter_of(e)) ^ prisms[fi] for e, pa, pb, fi in seams],
         m3d.OpType.Add)
 
     # then sink the sockets into the rim
     holes = []
-    for e, pa, pb in seams:
+    for e, pa, pb, fi in seams:
         if e not in SOCKET_KEYS:
             continue
         cut, rebate, _ = socket_parts(miter_of(e))
