@@ -131,9 +131,13 @@ if __name__ == "__main__":
         nn = np.cross(t[:, 1] - t[:, 0], t[:, 2] - t[:, 0])
         nn /= np.maximum(np.linalg.norm(nn, axis=1), 1e-12)[:, None]
         lam = np.clip(nn @ np.array([0.4, -0.75, 0.55]) / 1.0, 0, 1)
-        ax3.add_collection3d(Poly3DCollection(
-            t, facecolors=np.clip(np.array(col)[None, :] * (0.32 + 0.68 * lam)[:, None], 0, 1),
-            edgecolors="none"))
+        cols = np.clip(np.array(col)[None, :] * (0.32 + 0.68 * lam)[:, None], 0, 1)
+        # edge colour matches the face: see render_strip. Left as "none",
+        # matplotlib antialiases each triangle against the background and the
+        # seams do not cancel, so a flat surface fanned into thin triangles
+        # reads as streaked and the streaks look like geometry.
+        ax3.add_collection3d(Poly3DCollection(t, facecolors=cols, edgecolors=cols,
+                                              linewidths=0.4))
     pts = np.concatenate([a, b]).reshape(-1, 3)
     lo, hi = pts.min(0), pts.max(0)
     span = np.maximum(hi - lo, 1e-6)
