@@ -62,12 +62,15 @@ if __name__ == "__main__":
         for size in SIZES_MM:
             log = run("gen_flat_strip.py", key, str(size))
             fp = re.search(r"cap0: .*footprint ([\d.]+) x ([\d.]+)", log)
+            sock = re.search(r"(\d+) magnet sockets", log)
             rungs.append({
                 "mm": size,
                 "edge": grab(log, r"wants edge ([\d.]+)mm"),
                 "path": re.search(r"wrote (\S+\.stl)", log).group(1),
                 "bed": [float(fp.group(1)), float(fp.group(2))],
                 "turn": grab(log, r"a ([\d.]+) deg turn"),
+                # per strip; the finished solid takes two strips, so twice this
+                "sockets": int(sock.group(1)) if sock else 0,
             })
 
         caps = solid.strips()

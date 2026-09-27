@@ -57,95 +57,38 @@ import numpy as np
 sys.argv = [sys.argv[0], (sys.argv[1] if len(sys.argv) > 1 else "icosahedron")]
 import gen_flat_strip as G          # noqa: E402  (reads the solid off argv)
 
-MAGNET_DIA, MAGNET_H = 4.0, 2.0
-FIT = 0.2                 # mm added to the pocket so the magnet drops in
-WALL = 0.8                # mm of plastic between the magnet and the mating face
-SKIN = 0.8                # mm of plastic over the outer surface, under the pocket
-LID_T = 0.8               # mm, the lid and the rebate it sits flush in
-LID_GAP = 0.15            # mm clearance round the lid
-PROUD = 0.4               # mm every cutter runs past the surface it cuts
+# The socket itself lives in gen_flat_strip now, with the part it goes into.
+# Named here only so the test and the real thing cannot drift apart.
+MAGNET_DIA, MAGNET_H = G.MAGNET_DIA, G.MAGNET_H
+FIT, WALL, SKIN = G.MAGNET_FIT, G.SOCKET_WALL, G.SOCKET_SKIN
+LID_T, LID_GAP, PROUD = G.LID_T, G.LID_GAP, G.SOCKET_PROUD
 
 TILE_LEN = 26.0           # mm along the seam
 TILE_DEEP = 14.0          # mm back from it, into the face
-BOSS_W = 9.0              # mm of pad along the seam
-BOSS_D = 7.0              # mm of pad back from the mating face
 SEG = 96
 
 
-def frame(miter):
-    """Along the seam, into the material square to the mating face, and up
-    that face. The magnet's axis is the second; it drops in along the third."""
-    sec = math.hypot(1.0, miter)
-    return (np.array([1.0, 0.0, 0.0]),
-            np.array([0.0, 1.0 / sec, -miter / sec]),
-            np.array([0.0, miter / sec, 1.0 / sec]))
-
-
-def on_face(t, miter):
-    """The point t millimetres up the mating face from the seam edge."""
-    _, _, e2 = frame(miter)
-    return np.array([0.0, G.CONTACT_CLEARANCE, 0.0]) + t * e2
-
-
-def seat_t(miter):
-    """Where the magnet sits, measured up the mating face.
-
-    Far enough that the pocket's lowest corner -- the far bottom one, since
-    the pocket leans back with the miter -- still has skin over the outer
-    surface."""
-    r, h = (MAGNET_DIA + FIT) / 2, MAGNET_H + FIT
-    return r + (WALL + h) * miter + SKIN * math.hypot(1.0, miter)
+frame = G.seam_frame
+on_face = G.on_seam
+seat_t = G.socket_seat
+boss_top_z = G.pad_top
 
 
 def pocket_top_z(miter):
-    """The highest the magnet reaches, which is what the pad has to clear."""
-    sec = math.hypot(1.0, miter)
-    r = (MAGNET_DIA + FIT) / 2
-    return (seat_t(miter) + r) / sec - WALL * miter / sec
-
-
-def boss_top_z(miter):
-    return pocket_top_z(miter) + LID_T + 0.2
-
-
-def socket(miter, along):
-    """The magnet's pocket and the channel it slides down, as one swept
-    solid: a cylinder dragged up the mating face until it leaves the pad.
-    Sweeping a convex body along a line is the hull of its two ends."""
-    _, n, e2 = frame(miter)
-    r, h = (MAGNET_DIA + FIT) / 2, MAGNET_H + FIT
-    cyl = m3d.Manifold.cylinder(h, r, r, SEG)
-    cyl = cyl.rotate([math.degrees(math.atan2(-1.0, -miter)), 0, 0])
-    seat = on_face(seat_t(miter), miter) + WALL * n + np.array([along, 0, 0])
-    lo = cyl.translate(list(seat))
-    run = (boss_top_z(miter) + PROUD) * math.hypot(1.0, miter)   # more than enough
-    return m3d.Manifold.batch_hull([lo, lo.translate(list(run * e2))])
+    return G.pad_top(miter) - LID_T - 0.2
 
 
 def build(miter):
-    top = boss_top_z(miter)
+    top = G.pad_top(miter)
+    pad, cut, rebate, lid = G.socket_parts(miter)
 
     tile = m3d.Manifold.cube([TILE_LEN, TILE_DEEP, G.TOP_Z], False)
     tile = tile.translate([-TILE_LEN / 2, 0, 0])
-    # the pad, sitting on the rim, its seam side carried on by the same cut
-    boss = m3d.Manifold.cube([BOSS_W, BOSS_D, top], False)
-    boss = boss.translate([-BOSS_W / 2, 0, 0])
-    tile += boss
+    tile += pad                                # the pad, standing on the rim
     tile -= G.seam_cut((-TILE_LEN, 0.0), (TILE_LEN, 0.0), miter, up_to=top)
-
-    cut = socket(miter, 0.0)
     tile -= cut
-
-    # a rebate round the channel's mouth so the lid finishes flush, shaped
-    # from the mouth itself rather than guessed at
-    mouth = cut.slice(top - LID_T).to_polygons()
-    rebate2d = m3d.CrossSection(mouth).offset(1.2, m3d.JoinType.Round, 2.0, SEG)
-    rebate = m3d.Manifold.extrude(rebate2d, LID_T + PROUD).translate([0, 0, top - LID_T])
     tile -= rebate
-
-    lid2d = rebate2d.offset(-LID_GAP, m3d.JoinType.Round, 2.0, SEG)
-    lid = m3d.Manifold.extrude(lid2d, LID_T)
-    return tile, lid, rebate2d
+    return tile, lid, None
 
 
 def partner(tile, miter):
@@ -197,8 +140,9 @@ if __name__ == "__main__":
     print(f"  magnet seated {seat_t(miter):.2f}mm up the mating face, reaching "
           f"{pocket_top_z(miter):.2f}mm; the face itself only runs to "
           f"{G.TOP_Z:.2f}mm, which is why there is a pad")
+    pw, pd = G.pad_size(miter)
     print(f"  pad {top - G.TOP_Z:.2f}mm proud of the {G.WALL_HEIGHT:.2f}mm rim, "
-          f"{BOSS_W:.0f} x {BOSS_D:.0f}mm; the rim itself is untouched")
+          f"{pw:.1f} x {pd:.1f}mm; the rim itself is untouched")
     print(f"  pocket's lowest corner clears the outer surface by {low_z:.2f}mm")
     print(f"  lid {LID_T:.2f}mm thick, flush in its rebate, {LID_GAP:.2f}mm all round")
 

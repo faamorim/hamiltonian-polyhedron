@@ -75,7 +75,7 @@ import numpy as np
 import sys
 
 from polyhedra import (SOLIDS, unfold, compute_fold_edges, shared_verts, edge_key,
-                       net_alignment_deg)
+                       net_alignment_deg, net_alignment_turns, socket_edges)
 
 SOLID = SOLIDS[(sys.argv[1] if len(sys.argv) > 1 else "icosahedron").lower()]
 
@@ -323,6 +323,181 @@ def hinge_trench(pa, pb, miter):
                           HINGE_THICKNESS + (depth + 1.0) / 2])
 
 
+# --- magnet sockets at the seam -------------------------------------------
+# A 4x2mm magnet stands with its poles across the seam and drops in edgewise
+# from the INSIDE face, down a channel in its own plane, behind a thin wall.
+# Attraction then presses it INTO that wall -- magnet, wall, body of the face,
+# all in compression -- instead of straight out of a hole with only friction
+# across it, which is what an earlier version did and why it let go. Glue is
+# welcome but never in the load path, and the lid never carries anything.
+#
+# SOCKET_WALL is the only number here chosen by feel rather than forced: it
+# falls out of the fit entirely, because thickening it lowers the top and the
+# bottom of the pocket by the same amount. Two of them, one per cap, set the
+# gap between the magnets and so the pull.
+MAGNET_DIA, MAGNET_H = 4.0, 2.0
+MAGNET_FIT = 0.2            # mm added to the pocket so the magnet drops in
+SOCKET_WALL = 0.8           # mm between the magnet and the mating face
+SOCKET_SKIN = 0.8           # mm of plastic under the pocket, over the outer surface
+SOCKET_PROUD = 0.4          # mm every cutter runs past the surface it cuts
+LID_T = 0.8                 # mm, the lid and the rebate it sits flush in
+LID_GAP = 0.15              # mm clearance round the lid
+LID_MARGIN = 1.2            # mm of rebate around the channel's mouth
+PAD_MARGIN = 1.3            # mm of pad around the socket it carries
+
+SOCKET_MIN_GAP = 0.5        # mm a pad must keep clear of any fold's miter plane
+_WANTED_KEYS, _WANTED_AT = socket_edges(SOLID)
+
+
+def seam_frame(miter):
+    """Square into the material from the mating face, and up that face. The
+    magnet's axis is the first; it drops in along the second."""
+    sec = math.hypot(1.0, miter)
+    return (np.array([0.0, 1.0 / sec, -miter / sec]),
+            np.array([0.0, miter / sec, 1.0 / sec]))
+
+
+def on_seam(t, miter):
+    """The point t millimetres up the mating face from the seam edge."""
+    return np.array([0.0, CONTACT_CLEARANCE, 0.0]) + t * seam_frame(miter)[1]
+
+
+def socket_seat(miter):
+    """Where the magnet sits, measured up the mating face: far enough that
+    the pocket's lowest corner -- the far bottom one, since the pocket leans
+    back with the miter -- still has skin over the outer surface."""
+    r = (MAGNET_DIA + MAGNET_FIT) / 2
+    return (r + (SOCKET_WALL + MAGNET_H + MAGNET_FIT) * miter
+            + SOCKET_SKIN * math.hypot(1.0, miter))
+
+
+def pad_top(miter):
+    """How high the pad has to stand. The magnet needs MAGNET_DIA measured up
+    the mating face and the rim gives only TOP_Z x sec of it, so at the seam
+    edges that carry a socket -- four of them per cap -- a local pad makes up
+    the difference. Raising the rim instead would charge every face of every
+    solid for what four faces need, and would move a fold geometry that is
+    already print-tested."""
+    sec = math.hypot(1.0, miter)
+    r = (MAGNET_DIA + MAGNET_FIT) / 2
+    return ((socket_seat(miter) + r) / sec - SOCKET_WALL * miter / sec
+            + LID_T + 0.2)
+
+
+def socket_cutter(miter):
+    """The magnet's pocket and the channel it slides down, as one swept
+    solid: a cylinder dragged up the mating face until it leaves the pad.
+    Sweeping a convex body along a line is the hull of its two ends."""
+    n, e2 = seam_frame(miter)
+    r, h = (MAGNET_DIA + MAGNET_FIT) / 2, MAGNET_H + MAGNET_FIT
+    cyl = m3d.Manifold.cylinder(h, r, r, 96)
+    cyl = cyl.rotate([math.degrees(math.atan2(-1.0, -miter)), 0, 0])
+    lo = cyl.translate(list(on_seam(socket_seat(miter), miter) + SOCKET_WALL * n))
+    run = (pad_top(miter) + SOCKET_PROUD) * math.hypot(1.0, miter)
+    return m3d.Manifold.batch_hull([lo, lo.translate(list(run * e2))])
+
+
+_PAD_SIZE = {}
+
+
+def pad_size(miter):
+    """How big the pad has to be, measured from the socket it carries rather
+    than chosen: the channel's own footprint up to the pad's top, plus a wall
+    all round.
+
+    It was two fixed numbers, 9 x 7mm, which on the icosahedron put a pad
+    corner 0.09mm from a fold's miter plane -- close enough to jam the fold
+    before its contact faces met. A pad has no business being bigger than
+    what it holds, and the face it sits on is not always roomy."""
+    if miter not in _PAD_SIZE:
+        top = pad_top(miter)
+        clip = m3d.Manifold.cube([1e3, 1e3, top], True).translate([0, 0, top / 2])
+        b = (socket_cutter(miter) ^ clip).bounding_box()
+        _PAD_SIZE[miter] = (2 * (max(-b[0], b[3]) + PAD_MARGIN), b[4] + PAD_MARGIN)
+    return _PAD_SIZE[miter]
+
+
+def socket_parts(miter):
+    """The pad, the pocket, the rebate, and the lid that fills it -- all in a
+    frame with the seam edge on the x axis and the face on the +y side."""
+    top = pad_top(miter)
+    w, d = pad_size(miter)
+    pad = m3d.Manifold.cube([w, d, top], False).translate([-w / 2, 0, 0])
+    cut = socket_cutter(miter)
+    mouth = m3d.CrossSection(cut.slice(top - LID_T).to_polygons())
+    rebate2d = mouth.offset(LID_MARGIN, m3d.JoinType.Round, 2.0, 96)
+    rebate = m3d.Manifold.extrude(rebate2d, LID_T + SOCKET_PROUD)
+    rebate = rebate.translate([0, 0, top - LID_T])
+    lid = m3d.Manifold.extrude(
+        rebate2d.offset(-LID_GAP, m3d.JoinType.Round, 2.0, 96), LID_T)
+    return pad, cut, rebate, lid
+
+
+def at_edge(part, pa, pb):
+    """Swing a part built on the x axis onto a real seam edge of the net."""
+    return part.rotate([0, 0, math.degrees(math.atan2(pb[1] - pa[1], pb[0] - pa[0]))]) \
+               .translate([(pa[0] + pb[0]) / 2, (pa[1] + pb[1]) / 2, 0])
+
+
+def pad_clearance(face_2d, path, fold_edges, keys):
+    """How close a socket pad comes to the miter plane of a fold.
+
+    A pad stands above the rim, so it reaches further inside the fold than
+    anything else on the face does. If it crossed the miter plane the two
+    faces would jam on it long before their contact faces met -- the same
+    failure as the old trench, in a new place. Returns the worst margin over
+    every pad and every fold it shares a face with; it must stay positive.
+    """
+    worst = math.inf if keys else 0.0
+    for fi in path:
+        face = SOLID.faces[fi]
+        pts = dict(face_2d[fi])
+        centre = np.mean([q for _, q in face_2d[fi]], axis=0)
+        seam = [(edge_key(face[k], face[(k + 1) % len(face)]), k)
+                for k in range(len(face))]
+        for e, k in seam:
+            if e in fold_edges or e not in keys:
+                continue
+            pa, pb = np.array(pts[face[k]]), np.array(pts[face[(k + 1) % len(face)]])
+            u = (pb - pa) / np.linalg.norm(pb - pa)
+            nrm = np.array([-u[1], u[0]])
+            if nrm @ (centre - pa) < 0:
+                u, nrm = -u, -nrm
+            mid = (pa + pb) / 2
+            w, d = pad_size(miter_of(e))
+            corners = [mid + su * (w / 2) * u + sv * nrm
+                       for su in (-1, 1) for sv in (0.0, d)]
+            for e2, k2 in seam:
+                if e2 not in fold_edges:
+                    continue
+                qa = np.array(pts[face[k2]])
+                qb = np.array(pts[face[(k2 + 1) % len(face)]])
+                v = (qb - qa) / np.linalg.norm(qb - qa)
+                fn = np.array([-v[1], v[0]])
+                if fn @ (centre - qa) < 0:
+                    fn = -fn
+                need = wall_margin(pad_top(miter_of(e)), miter_of(e2))
+                worst = min(worst, min(fn @ (c - qa) for c in corners) - need)
+    return worst
+
+
+# A pad is absolute millimetres, like the hinge, but the face it stands on
+# scales with the model -- so whether a socket fits is a question about THIS
+# size, not about the solid. Ask it once, here, rather than discovering it in
+# the middle of a boolean: at the small end of the ladder the dodecahedron's
+# pentagons and the d10's kites have no room for one.
+def _fit_check():
+    path = SOLID.strips()[0]
+    f2 = unfold(SOLID, path, TARGET_EDGE)
+    return pad_clearance(f2, path, compute_fold_edges(SOLID.faces, path), _WANTED_KEYS)
+
+
+SOCKET_GAP = _fit_check()
+SOCKET_FITS = SOCKET_GAP >= SOCKET_MIN_GAP
+SOCKET_KEYS = _WANTED_KEYS if SOCKET_FITS else set()
+SOCKET_AT = _WANTED_AT if SOCKET_FITS else []
+
+
 def seam_cut(pa, pb, miter, up_to=None):
     """The wedge to take off the base along one seam edge.
 
@@ -387,9 +562,10 @@ def build_strip(path, edge_len=TARGET_EDGE):
     ]
     solid = m3d.Manifold.batch_boolean([base] + frustums, m3d.OpType.Add)
 
-    # Every edge of the net that is not a fold is a seam: miter it, base and
-    # all, so the two caps meet on the bisector instead of on a square ledge.
-    cuts = []
+    # Every edge of the net that is not a fold is a seam. Gather them all,
+    # each turned so the face lies on its +y side, which is the frame the
+    # cut and the socket are built in.
+    seams = []
     for fi in path:
         pts = dict(face_2d[fi])
         face = SOLID.faces[fi]
@@ -400,15 +576,40 @@ def build_strip(path, edge_len=TARGET_EDGE):
             if e in fold_edges:
                 continue
             pa, pb = pts[a], pts[b]
-            # the cut is built with the material on its +y side, which means
-            # the edge has to run with the face on the left
             nrm = (-(pb[1] - pa[1]), pb[0] - pa[0])
             if nrm[0] * (centre[0] - pa[0]) + nrm[1] * (centre[1] - pa[1]) < 0:
                 pa, pb = pb, pa
-            cuts.append(seam_cut(pa, pb, miter_of(e)))
-    if cuts:
-        solid -= m3d.Manifold.batch_boolean(cuts, m3d.OpType.Add)
-    return solid, face_2d
+            seams.append((e, pa, pb))
+
+    # Pads first, so the seam cuts trim them along with everything else: a
+    # pad stands above the rim, and a cut sized for the rim would leave its
+    # front lip proud and detached.
+    lids, tallest = [], TOP_Z
+    for e, pa, pb in seams:
+        if e not in SOCKET_KEYS:
+            continue
+        m = miter_of(e)
+        pad, _, _, lid = socket_parts(m)
+        solid += at_edge(pad, pa, pb)
+        lids.append(lid)
+        tallest = max(tallest, pad_top(m))
+
+    # then miter every seam, base and all, so the two caps meet on the
+    # bisector instead of on a square ledge
+    solid -= m3d.Manifold.batch_boolean(
+        [seam_cut(pa, pb, miter_of(e), up_to=tallest) for e, pa, pb in seams],
+        m3d.OpType.Add)
+
+    # then hollow the pads out
+    holes = []
+    for e, pa, pb in seams:
+        if e not in SOCKET_KEYS:
+            continue
+        _, cut, rebate, _ = socket_parts(miter_of(e))
+        holes += [at_edge(cut, pa, pb), at_edge(rebate, pa, pb)]
+    if holes:
+        solid -= m3d.Manifold.batch_boolean(holes, m3d.OpType.Add)
+    return solid, face_2d, lids
 
 
 def export_stl(manifold_obj, path_out):
@@ -525,7 +726,7 @@ if __name__ == "__main__":
 
     solids = []
     for i, path in enumerate(paths):
-        solid, face_2d = build_strip(path)
+        solid, face_2d, lids = build_strip(path)
         n = len(solid.decompose())
         assert n == 1, f"cap {i} is split into {n} disconnected shells"
         bb = solid.bounding_box()
@@ -535,7 +736,7 @@ if __name__ == "__main__":
             f"at TARGET_EDGE={TARGET_EDGE}mm")
         print(f"cap{i}: volume {solid.volume():8.1f}mm3   footprint {w:.1f} x {h:.1f} x "
               f"{bb[5] - bb[2]:.1f}mm")
-        solids.append((solid, face_2d, path))
+        solids.append((solid, face_2d, path, lids))
 
     # The design is only worth one file if the two caps really are the same
     # part. Comparing vertex lists does not answer that -- the two meshes are
@@ -545,6 +746,8 @@ if __name__ == "__main__":
     print(f"\nboth caps: volume {solids[0][0].volume():.6f} / "
           f"{solids[1][0].volume():.6f}, area {solids[0][0].surface_area():.6f} / "
           f"{solids[1][0].surface_area():.6f}")
+    turns = net_alignment_turns(solids[0][1], solids[0][2],
+                                solids[1][1], solids[1][2], tol=1e-5)
     turn, net_err = net_alignment_deg(solids[0][1], solids[0][2],
                                       solids[1][1], solids[1][2])
     # Judged against the edge length, not in bare millimetres. The residual is
@@ -557,7 +760,14 @@ if __name__ == "__main__":
         f"the two nets are not congruent (best fit off by {net_err:.6f}mm, "
         f"{net_err / TARGET_EDGE:.1e} of an edge) -- this solid needs two "
         f"different prints")
-    diff = congruence_error(solids[0][0], solids[1][0], turn)
+    # Try EVERY turn that aligns the nets, not just the one a search happened
+    # to return. The two caps are one part if SOME rigid motion carries one
+    # onto the other, and a zigzag strip's outline has a half turn in it, so
+    # there are always two candidates. Bare caps matched under either; caps
+    # with sockets match under only one, and the search picked the other on
+    # the octahedron at 63mm and called a good part not congruent.
+    diff, turn = min((congruence_error(solids[0][0], solids[1][0], t), t)
+                     for t in (turns or [turn]))
     # Read the leftover volume as an average surface displacement, which is
     # both physically meaningful and independent of how big the part is: a
     # real difference between the caps would be a whole feature, microns
@@ -572,7 +782,16 @@ if __name__ == "__main__":
         f"the two caps differ by {skin:.2e}mm of surface -- too much to be "
         f"arithmetic, so they are genuinely not the same part")
 
-    solid, face_2d, path = solids[0]
+    solid, face_2d, path, lids = solids[0]
+    if SOCKET_KEYS:
+        print(f"{len(SOCKET_KEYS)} magnet sockets at cycle edges {SOCKET_AT}, pads "
+              f"{pad_top(min(map(miter_of, SOCKET_KEYS))) - TOP_Z:.2f}mm proud of the "
+              f"rim, nearest fold cleared by {SOCKET_GAP:.2f}mm")
+    else:
+        print(f"no magnet sockets: a pad would come within {SOCKET_GAP:.2f}mm of a "
+              f"fold's miter plane at this size and jam it. The pad is absolute "
+              f"millimetres and the face is not, so a larger size has room.")
+
     i = min(len(path) // 2, len(path) - 2)     # a 2-face strip has only one fold
     va, vb = shared_verts(SOLID.faces, path[i], path[i + 1])
     fold = miter_of(edge_key(va, vb))
@@ -598,5 +817,13 @@ if __name__ == "__main__":
 
     name = SOLID.name.split()[-1].lower()
     out = f"hardware/tests/flat_strip_{name}_{TARGET_SIZE:g}mm.stl"
-    export_stl(solid, out)
-    print(f"\nwrote {out}  (print TWO of these)")
+    # the lids ride along beside the strip: they are the same print, and one
+    # strip needs exactly as many as it has sockets
+    bb = solid.bounding_box()
+    shipped = solid
+    for j, lid in enumerate(lids):
+        b = lid.bounding_box()
+        shipped += lid.translate([bb[0] - b[0] + j * (b[3] - b[0] + 3.0),
+                                  bb[4] - b[1] + 4.0, -b[2]])
+    export_stl(shipped, out)
+    print(f"\nwrote {out}  (print TWO of these: strip + {len(lids)} lids)")

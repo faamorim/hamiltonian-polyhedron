@@ -64,7 +64,7 @@ def profile(ax, tile, fixed, axis, top, steps=420):
 
 def magnet_outline(miter):
     """Where the magnet ends up, in the plane of the cut across the seam."""
-    _, n, e2 = T.frame(miter)
+    n, e2 = T.frame(miter)
     c = T.on_face(T.seat_t(miter), miter) + T.WALL * n
     r, h = T.MAGNET_DIA / 2, T.MAGNET_H
     pts = [c - r * e2, c + r * e2, c + r * e2 + h * n, c - r * e2 + h * n]
@@ -115,7 +115,7 @@ if __name__ == "__main__":
 
     # --- along the seam ---------------------------------------------------
     ax2 = fig.add_subplot(2, 2, 2)
-    _, n, _ = T.frame(miter)
+    n, _ = T.frame(miter)
     y_mid = (T.on_face(T.seat_t(miter), miter) + (T.WALL + T.MAGNET_H / 2) * n)[1]
     profile(ax2, tile, y_mid, 0, top + 0.1)
     ax2.set_xlim(-7.5, 7.5); ax2.set_ylim(-0.3, top + 0.5)

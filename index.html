@@ -512,7 +512,9 @@
     downloadList.appendChild(fileLink(
       rung.path, "STL", "3D-print strip",
       "one part, printed twice &middot; " + rung.edge.toFixed(1) + "mm edges &middot; " +
-      "needs " + Math.ceil(rung.bed[0]) + " &times; " + Math.ceil(rung.bed[1]) + "mm of bed"));
+      "needs " + Math.ceil(rung.bed[0]) + " &times; " + Math.ceil(rung.bed[1]) + "mm of bed" +
+      (rung.sockets ? " &middot; takes " + (2 * rung.sockets) +
+                      " magnets, 4 &times; 2mm" : "")));
     var warn = document.createElement("div");
     warn.className = "sizeRow";
     warn.innerHTML = "Pick the size here, not in the slicer: the hinge is a fixed " +

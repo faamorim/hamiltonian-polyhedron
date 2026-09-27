@@ -52,7 +52,7 @@ def view(ax, tris, elev, azim, title, light=(0.35, 0.5, 0.79)):
 
 if __name__ == "__main__":
     path = G.SOLID.strips()[0]
-    solid, face_2d = G.build_strip(path)
+    solid, face_2d, _ = G.build_strip(path)
     mesh = solid.to_mesh()
     tris = np.asarray(mesh.vert_properties)[:, :3][np.asarray(mesh.tri_verts)]
 
