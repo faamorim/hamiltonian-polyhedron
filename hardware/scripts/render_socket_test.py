@@ -76,7 +76,7 @@ if __name__ == "__main__":
     ang = min(round(a, 6) for a in G.FOLD_ANGLES.values())
     miter = math.tan(math.radians(ang) / 2)
     tile, lid, _ = T.build(miter)
-    top = T.boss_top_z(miter)
+    top = G.TOP_Z
 
     fig = plt.figure(figsize=(12.8, 7.4), facecolor=BG)
 
@@ -99,13 +99,13 @@ if __name__ == "__main__":
                 fontsize=7.5, color=INK,
                 arrowprops=dict(arrowstyle="->", color=INK, lw=0.9))
     ax.annotate("drops in from here,\nlid sits flush", xy=(3.0, top - 0.1),
-                xytext=(6.0, top + 0.5), fontsize=7.5, color=INK,
+                xytext=(6.2, top + 0.6), fontsize=7.5, color=INK,
                 arrowprops=dict(arrowstyle="->", color=INK, lw=0.9))
-    ax.axhline(G.TOP_Z, color="0.6", lw=0.8, ls=":")
-    ax.text(11.2, G.TOP_Z + 0.12, f"rim, {G.WALL_HEIGHT:.1f}mm (unchanged)",
+    ax.axhline(G.FACE_THICKNESS, color="0.6", lw=0.8, ls=":")
+    ax.text(11.2, G.FACE_THICKNESS + 0.12, "face skin",
             fontsize=7, color="0.45", ha="right")
     ax.axhline(top, color="0.6", lw=0.8, ls=":")
-    ax.text(11.2, top + 0.12, f"pad, +{top - G.TOP_Z:.2f}mm",
+    ax.text(11.2, top + 0.12, f"rim top, {G.WALL_HEIGHT:.2f}mm -- flat inside",
             fontsize=7, color="0.45", ha="right")
     ax.set_xlim(-0.4, 11.4); ax.set_ylim(-0.4, top + 1.4)
     ax.set_aspect("equal")

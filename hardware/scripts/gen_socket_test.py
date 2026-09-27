@@ -27,14 +27,12 @@ the whole point:
     number chosen on feel, not one the geometry forces. 0.8mm here, 1.6mm
     between magnets once both caps have one.
 
-THE BOSS. The magnet needs 4mm measured up the mating face, and at the 3mm
-rim the strips use there is only 4.50mm of face to put it in, once skin over
-the outer surface is taken off. Rather than raise the rim everywhere -- it
-would want 4.34mm, on every face of every solid -- this raises a local pad
-on the inside at the socket, and nowhere else. The rim stays 3mm, every fold
-keeps the geometry already print-tested, and only four faces per cap carry
-a socket at all. Printed flat the pad is a block on top of a flat surface:
-no overhang, no support.
+THE RIM. The magnet needs 4mm measured up the mating face, and the rim has
+to be tall enough to hold that plus the lid's rebate. So the rim is raised
+to suit -- everywhere, not as a lump on the faces that carry a socket, so
+the inside of a finished cap comes out flat. The inside is seen: pulling the
+two caps apart is the whole point of the object. Nothing below the face
+moves, so the hinge is untouched.
 
 WHY FOUR. The cycle has twelve edges but they do not all need magnets -- the
 solid holds its own shape, the magnets only align the two rims. Two of the
@@ -71,20 +69,19 @@ SEG = 96
 frame = G.seam_frame
 on_face = G.on_seam
 seat_t = G.socket_seat
-boss_top_z = G.pad_top
+boss_top_z = G.socket_top
 
 
 def pocket_top_z(miter):
-    return G.pad_top(miter) - LID_T - 0.2
+    return G.socket_top(miter) - LID_T - 0.2
 
 
 def build(miter):
-    top = G.pad_top(miter)
-    pad, cut, rebate, lid = G.socket_parts(miter)
+    top = G.TOP_Z
+    cut, rebate, lid = G.socket_parts(miter)
 
-    tile = m3d.Manifold.cube([TILE_LEN, TILE_DEEP, G.TOP_Z], False)
+    tile = m3d.Manifold.cube([TILE_LEN, TILE_DEEP, top], False)
     tile = tile.translate([-TILE_LEN / 2, 0, 0])
-    tile += pad                                # the pad, standing on the rim
     tile -= G.seam_cut((-TILE_LEN, 0.0), (TILE_LEN, 0.0), miter, up_to=top)
     tile -= cut
     tile -= rebate
@@ -139,10 +136,10 @@ if __name__ == "__main__":
           f"the two of them once both caps have one")
     print(f"  magnet seated {seat_t(miter):.2f}mm up the mating face, reaching "
           f"{pocket_top_z(miter):.2f}mm; the face itself only runs to "
-          f"{G.TOP_Z:.2f}mm, which is why there is a pad")
-    pw, pd = G.pad_size(miter)
-    print(f"  pad {top - G.TOP_Z:.2f}mm proud of the {G.WALL_HEIGHT:.2f}mm rim, "
-          f"{pw:.1f} x {pd:.1f}mm; the rim itself is untouched")
+          f"{G.TOP_Z:.2f}mm -- which is what sets the rim")
+    pw, pd = G.socket_footprint(miter)
+    print(f"  rim {G.WALL_HEIGHT:.2f}mm (from {G.MIN_WALL_HEIGHT:.2f}), so the inside "
+          f"is flat; the socket takes {pw:.1f} x {pd:.1f}mm of face")
     print(f"  pocket's lowest corner clears the outer surface by {low_z:.2f}mm")
     print(f"  lid {LID_T:.2f}mm thick, flush in its rebate, {LID_GAP:.2f}mm all round")
 
