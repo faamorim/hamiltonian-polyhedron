@@ -323,7 +323,7 @@ def hinge_trench(pa, pb, miter):
                           HINGE_THICKNESS + (depth + 1.0) / 2])
 
 
-def seam_cut(pa, pb, miter):
+def seam_cut(pa, pb, miter, up_to=None):
     """The wedge to take off the base along one seam edge.
 
     The rim above is shaped ring by ring, but the base under it is one flat
@@ -342,9 +342,15 @@ def seam_cut(pa, pb, miter):
     """
     ax, ay = pa
     bx, by = pb
-    depth = (CONTACT_CLEARANCE + TOP_Z * miter) / math.hypot(1.0, miter) + 0.5
+    # How far the wedge to remove reaches, and so how deep the box must be:
+    # measured to the TALLEST thing this plane has to cut through. That is
+    # the rim for a strip, but anything standing on the rim -- a pad for a
+    # magnet socket, say -- is taller, and a box sized for the rim leaves a
+    # sliver of it standing proud, detached from the part.
+    up_to = TOP_Z if up_to is None else up_to
+    depth = (CONTACT_CLEARANCE + up_to * miter) / math.hypot(1.0, miter) + 0.5
     length = math.hypot(bx - ax, by - ay) + 2 * depth
-    tall = 4 * TOP_Z + 8
+    tall = 4 * up_to + 8
     box = m3d.Manifold.cube([length, depth, tall], True)
     box = box.translate([0, -depth / 2, 0])          # its y=0 face is the plane
     box = box.rotate([-math.degrees(math.atan(miter)), 0, 0])
