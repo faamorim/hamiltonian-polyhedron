@@ -76,7 +76,7 @@ def draw(ax, prof, psi, title, far=6.0):
 
 if __name__ == "__main__":
     path = G.SOLID.strips()[0]
-    solid, face_2d = G.build_strip(path)
+    solid, face_2d, _ = G.build_strip(path)
     prof, miter, target = section(solid, face_2d, path)
 
     live = [(z, d) for z, d in prof if z > G.HINGE_THICKNESS + 1e-6 and d > 0]

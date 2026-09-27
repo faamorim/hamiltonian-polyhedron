@@ -17,6 +17,7 @@ icosahedron vertex), so it inherits data that is already verified rather
 than adding twenty fresh coordinates to get wrong.
 """
 
+import itertools
 import math
 import numpy as np
 
@@ -177,6 +178,215 @@ def net_alignment_deg(face_2d_a, path_a, face_2d_b, path_b):
         step /= 8
         best = min((err(d), d) for d in np.arange(best[1] - 4 * step, best[1] + 4 * step, step))
     return best[1], best[0]
+
+
+def net_alignment_turns(face_2d_a, path_a, face_2d_b, path_b, tol=1e-5):
+    """EVERY turn that lands cap B's net on cap A's, not just one.
+
+    There is always more than one: a strip of an even number of faces zigzags
+    back on itself, so its outline carries a half turn, and the two answers
+    differ by 180 degrees. While the caps were bare that did not matter --
+    either turn mapped one onto the other. Cut sockets into them and only one
+    does, and which of the two a search happens to land in moved with the
+    model's size: the octahedron came back 240 degrees at 40mm and 60 at
+    63mm, and the congruence check, calling the search again, disagreed with
+    whoever had placed the sockets."""
+    A, B = net_corners(face_2d_a, path_a), net_corners(face_2d_b, path_b)
+    if len(A) != len(B):
+        return []
+    A0, B0 = A - A.mean(0), B - B.mean(0)
+    scale = max(1e-9, float(np.linalg.norm(A0, axis=1).max()))
+
+    def err(deg):
+        t = math.radians(deg)
+        c, s_ = math.cos(t), math.sin(t)
+        r = B0 @ np.array([[c, s_], [-s_, c]])
+        return max(np.min(np.linalg.norm(A0 - q, axis=1)) for q in r)
+
+    out = []
+    for coarse in np.arange(0, 360, 0.5):
+        best = (err(coarse), coarse)
+        step = 0.5
+        for _ in range(8):
+            step /= 8
+            best = min((err(d), d) for d in
+                       np.arange(best[1] - 4 * step, best[1] + 4 * step, step))
+        if best[0] < tol * scale and not any(
+                min(abs(best[1] - t), 360 - abs(best[1] - t)) < 0.25 for t in out):
+            out.append(best[1])
+    return sorted(out)
+
+
+def seam_edges(solid, path, face_2d=None):
+    """Every edge of a cap's net that is NOT a fold -- which is every edge of
+    the Hamiltonian cycle, since those are the only ones left. Returns
+    (cycle edge, owning face, midpoint in the net) when a net is given, and
+    (cycle edge, owning face) when one is not."""
+    folds = compute_fold_edges(solid.faces, path)
+    out = []
+    for fi in path:
+        f = solid.faces[fi]
+        pts = dict(face_2d[fi]) if face_2d else None
+        for k in range(len(f)):
+            a, b = f[k], f[(k + 1) % len(f)]
+            e = edge_key(a, b)
+            if e in folds:
+                continue
+            if pts is None:
+                out.append((e, fi))
+            else:
+                out.append((e, fi, (np.array(pts[a]) + np.array(pts[b])) / 2))
+    return out
+
+
+def seam_places(solid):
+    """Pair up the two caps' seam edges by WHERE THEY ARE ON THE PART.
+
+    The two caps are one part printed twice, so a socket cut at some place on
+    it appears on both -- but the caps sit differently in the finished solid,
+    so the two copies land on different edges of the cycle. This lays cap 1's
+    net onto cap 0's and reads off which of cap 0's seam edges each of cap
+    1's coincides with. The answer is a permutation of the cycle: cutting the
+    socket that serves cycle edge i on cap 0 also puts one on cycle edge
+    place[i], via cap 1.
+    """
+    caps = solid.strips()
+    nets = [unfold(solid, p, 1.0) for p in caps]
+    turns = net_alignment_turns(nets[0], caps[0], nets[1], caps[1])
+    assert turns, \
+        f"{solid.name}: the two nets are not congruent, so this does not apply"
+
+    a = seam_edges(solid, caps[0], nets[0])
+    b = seam_edges(solid, caps[1], nets[1])
+    ca = np.mean([p for _, _, p in a], axis=0)
+    cb = np.mean([p for _, _, p in b], axis=0)
+    cyc = [edge_key(solid.cycle[i], solid.cycle[(i + 1) % len(solid.cycle)])
+           for i in range(len(solid.cycle))]
+    at = {e: i for i, e in enumerate(cyc)}
+
+    places = []
+    for turn in turns:
+        t = math.radians(turn)
+        rot = np.array([[math.cos(t), -math.sin(t)], [math.sin(t), math.cos(t)]])
+        place = {}
+        for eb, _, pb in b:
+            q = rot @ (pb - cb) + ca
+            j = min(range(len(a)), key=lambda i: np.linalg.norm(a[i][2] - q))
+            place[at[a[j][0]]] = at[eb]
+        assert sorted(place) == list(range(len(cyc))) and \
+            sorted(place.values()) == list(range(len(cyc))), \
+            f"{solid.name}: the seam edges did not match up one to one"
+        places.append(place)
+    return places, cyc
+
+
+def socket_orbits(solid):
+    """The smallest sets of cycle edges that can carry a COMPLETE magnet pair.
+
+    Cutting the socket for edge i gives cap 0 one at i and cap 1 one at
+    place[i], so an edge only gets a pair when both it and its preimage are
+    cut. Following place round from i closes into a cycle, and that orbit is
+    the least you can commit to. A fixed point is an orbit of one: cut it and
+    that edge is paired on its own."""
+    places, cyc = seam_places(solid)
+    # orbits of the GROUP the maps generate, not of one of them. The net does
+    # not say which of its two alignments the fold actually realises, so a set
+    # is only safe when it survives either.
+    seen, orbits = set(), []
+    for i in range(len(cyc)):
+        if i in seen:
+            continue
+        orbit, front = {i}, [i]
+        while front:
+            j = front.pop()
+            for pl in places:
+                for k in (pl[j], next(x for x, y in pl.items() if y == j)):
+                    if k not in orbit:
+                        orbit.add(k)
+                        front.append(k)
+        seen |= orbit
+        orbits.append(sorted(orbit))
+    return orbits, places, cyc
+
+
+def end_to_end(solid):
+    """The cycle edges where an END face of one strip meets an END face of
+    the other. Those are the joints that close the two strips on each other,
+    and the paper template already puts its tabs there."""
+    caps = solid.strips()
+    ends = [{c[0], c[-1]} for c in caps]
+    own = [{e: fi for e, fi in seam_edges(solid, c)} for c in caps]
+    cyc = [edge_key(solid.cycle[i], solid.cycle[(i + 1) % len(solid.cycle)])
+           for i in range(len(solid.cycle))]
+    return sorted(i for i, e in enumerate(cyc)
+                  if own[0].get(e) in ends[0] and own[1].get(e) in ends[1])
+
+
+def socket_edges(solid, max_run=2):
+    """Which cycle edges get a magnet, as edge keys.
+
+    The measure is how many faces sit between one magnet and the next ALONG
+    THE STRIP, not how evenly the magnets are spread round the seam.
+
+    That is not obvious and it is the opposite of what it looks like. The two
+    caps cannot be drawn apart as rigid bodies at all -- the mating normals
+    round the seam positively span space, so every rigid motion drives part
+    of one cap into the other, by 0.30 of a unit screw at worst on the
+    icosahedron. That is what interlocked means, and it means the magnets are
+    not holding against a pull. What they hold against is the cap FLEXING,
+    and a cap is a chain of stiff faces on thin living hinges: the folds
+    cannot close past their contact faces but nothing stops them opening. So
+    the span that gapes is a run of faces along the strip with no magnet in
+    it, and four magnets spread perfectly evenly round the seam leave a run
+    of four on the icosahedron while six in the right places leave two.
+
+    Starts from the joints where the two strips' ends meet -- with their
+    whole orbits, since an orbit cannot be taken in part -- and adds orbits
+    until no run is longer than max_run, preferring the fewest sockets and
+    then the most even spacing round the seam.
+    """
+    orbits, places, cyc = socket_orbits(solid)
+    ends = set(end_to_end(solid))
+    seed = [o for o in orbits if set(o) & ends]
+    rest = [o for o in orbits if not set(o) & ends]
+    caps = solid.strips()
+    at = {e: i for i, e in enumerate(cyc)}
+    owner = []
+    for cap in caps:
+        d = {}
+        for e, fi in seam_edges(solid, cap):
+            d.setdefault(at[e], set()).add(cap.index(fi))
+        owner.append(d)
+
+    def worst_run(idx):
+        out = 0
+        for d in owner:
+            pinned = {f for i in idx for f in d[i]}
+            run = 0
+            for k in range(len(caps[0])):
+                run = 0 if k in pinned else run + 1
+                out = max(out, run)
+        return out
+
+    def seam_gap(idx):
+        return max((idx[(i + 1) % len(idx)] - idx[i]) % len(cyc)
+                   for i in range(len(idx))) if len(idx) > 1 else len(cyc)
+
+    best = None
+    for r in range(len(rest) + 1):
+        for combo in itertools.combinations(rest, r):
+            idx = sorted(sum(seed, []) + [i for o in combo for i in o])
+            if not idx:
+                continue
+            key = (max(0, worst_run(idx) - max_run), len(idx), seam_gap(idx))
+            if best is None or key < best[0]:
+                best = (key, idx)
+    idx = best[1]
+
+    for pl in places:
+        assert {pl[i] for i in idx} == set(idx), \
+            f"{solid.name}: the chosen sockets are not one part printed twice"
+    return {cyc[i] for i in idx}, idx
 
 
 def compute_fold_edges(faces, path):

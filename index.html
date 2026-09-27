@@ -13,6 +13,7 @@
     --text:#e8e9ee;
     --text-dim:#9198ab;
     --accent:#ffd54a;
+    --seam:#ffb03a;
     --groupA:#e0524b;
     --groupB:#3fa7a0;
   }
@@ -64,6 +65,7 @@
   #legend{ font-size:0.82rem; line-height:1.5; }
   #legend .swatch{
     display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:6px;
+    border:1px solid var(--panel-border);
   }
   #stats{
     margin-top:6px; padding-top:14px; border-top:1px solid var(--panel-border);
@@ -140,14 +142,36 @@
         </div>
         <input type="range" id="sepSlider" min="0" max="2.5" step="0.01" value="0">
       </div>
+      <div class="field">
+        <div class="row">
+          <label for="seamSlider" style="margin-bottom:0">Seam thickness</label>
+          <span class="value" id="seamValue">1.00</span>
+        </div>
+        <input type="range" id="seamSlider" min="0" max="3" step="0.05" value="1">
+      </div>
+      <div class="field">
+        <label for="paletteSelect">Colours</label>
+        <select id="paletteSelect">
+          <option value="standard">Two colours (clearest)</option>
+          <option value="yinyang">Yin-yang: black &amp; white, with inlays</option>
+        </select>
+      </div>
       <div class="field checkbox-row">
         <input type="checkbox" id="autoRotate">
         <label for="autoRotate" style="margin:0; text-transform:none; letter-spacing:normal;">Auto-rotate</label>
       </div>
+      <div class="field checkbox-row">
+        <input type="checkbox" id="traceCycle">
+        <label for="traceCycle" style="margin:0; text-transform:none; letter-spacing:normal;">Trace the cycle &mdash; watch it split the solid</label>
+      </div>
+      <div class="field checkbox-row">
+        <input type="checkbox" id="followSeam">
+        <label for="followSeam" style="margin:0; text-transform:none; letter-spacing:normal;">Camera follows the seam</label>
+      </div>
       <div id="legend">
         <div><span class="swatch" style="background:var(--groupA)"></span>Cap A</div>
         <div><span class="swatch" style="background:var(--groupB)"></span>Cap B</div>
-        <div><span class="swatch" style="background:var(--accent)"></span>Hamiltonian cycle (seam)</div>
+        <div><span class="swatch" style="background:var(--seam)"></span>Hamiltonian cycle (seam)</div>
       </div>
       <div id="stats"></div>
       <div id="downloads">
@@ -317,7 +341,10 @@
       }
       comp++;
     }
-    return { compOf: compOf, count: comp };
+    // adj is adjacency WITHIN a cap -- faces joined by an edge the cycle
+    // does not cut. A cap is a strip, so its two ends are the faces with
+    // exactly one neighbour, which is where the inlay goes.
+    return { compOf: compOf, count: comp, adj: adj };
   }
 
   function triangulateFace(face){
@@ -332,7 +359,7 @@
   // ---- three.js scene ----
   var wrap = document.getElementById("canvas-wrap");
   var scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x12141c);
+  scene.background = new THREE.Color(0x12141c);   // PALETTES.standard.bg
 
   var camera = new THREE.PerspectiveCamera(45, 1, 0.1, 100);
   camera.position.set(4.2, 3.2, 5.2);
@@ -344,8 +371,17 @@
   controls.enableDamping = true;
   controls.dampingFactor = 0.08;
 
-  scene.add(new THREE.AmbientLight(0xffffff, 0.55));
-  var key1 = new THREE.DirectionalLight(0xffffff, 0.8);
+  // Set here at the standard palette's values and moved by applyPalette,
+  // because how hard this scene is lit is a property of the colours in it.
+  // The yin-yang palette needs the lighting flat: the faces are flat-shaded,
+  // and under ambient 0.55 with a 0.8 key the swing across one face is wider
+  // than the gap between near-white and near-black, so the white cap's
+  // shadowed faces come out the same grey as the black cap's lit ones and
+  // the halves stop separating. Two hues do not care, which is why the
+  // standard palette can afford the contrast.
+  var ambient = new THREE.AmbientLight(0xffffff, 0.55);
+  scene.add(ambient);
+  var key1 = new THREE.DirectionalLight(0xffffff, 0.80);
   key1.position.set(5, 6, 4);
   scene.add(key1);
   var key2 = new THREE.DirectionalLight(0xffffff, 0.35);
@@ -353,11 +389,49 @@
   scene.add(key2);
 
   var sphereGeo = new THREE.SphereGeometry(0.06, 16, 16);
-  var groupColors = [0xe0524b, 0x3fa7a0];
+  var DOT_R = 0.06;                                   // sphereGeo's own radius
+  var cylGeo = new THREE.CylinderGeometry(1, 1, 1, 14);   // unit tube along +y
+  var UP = new THREE.Vector3(0, 1, 0);
+  var SEAM_R = 0.035;      // world radius of the seam at thickness 1.00
+  var TRACE_SPEED = 2.0;   // cycle edges per second
+  var TRACE_HOLD = 1.2;    // edges' worth of pause on the closed loop
+  // Two palettes. Standard is the one that teaches: two hues separate the
+  // caps at any lighting, which is what a reader needs while they are still
+  // working out what a cap IS. Yin-yang is the object -- near-white and
+  // near-black, the two filaments, with the inlay triangles the printed
+  // model carries -- and it only reads with the lighting flattened, because
+  // flat-shaded faces of one value swing across the gap between two values.
+  // So the lights belong to the palette, not to the scene.
+  var PALETTES = {
+    standard: { caps: [0xe0524b, 0x3fa7a0], bg: 0x12141c,
+                amb: 0.55, k1: 0.80, k2: 0.35, inlay: false,
+                css: ["#e0524b", "#3fa7a0"] },
+    // The stage is mid-grey on purpose, and lighter than the page. A
+    // near-black cap on a near-black background has no silhouette: the
+    // faces the light misses merge into the backdrop and the half stops
+    // reading as a solid at all. A ground BETWEEN the two cap values is
+    // the only one both of them stand out against, so the dark half gets
+    // an edge and the light half keeps its own.
+    yinyang:  { caps: [0xf6f1e6, 0x1d1e24], bg: 0x3c414b,
+                amb: 0.80, k1: 0.30, k2: 0.15, inlay: true,
+                css: ["#f6f1e6", "#1d1e24"] }
+  };
+  var paletteName = "standard";
+  var NEUTRAL = 0x767d8d;   // a face the cycle has not reached yet
+  var INLAY_SCALE = 0.40;   // matches gen_flat_strip.py's INLAY_SCALE
+  var INLAY_LIFT = 0.006;   // off the face, so it cannot z-fight with it
   var TARGET_RADIUS = Math.sqrt(1 + PHI * PHI); // matches the icosahedron's circumradius, keeps shapes visually comparable
 
   var currentGroups = null;
   var currentDirections = null;
+  var currentSeam = null;
+  var seamWidth = 1.0;     // the slider
+  var tracing = false;
+  var traceT = 0;          // how far the walk has got, in cycle edges
+  var following = false;   // camera rides the walk
+  var camT = 0;            // ... and its own clock, for when nothing is tracing
+  var currentFaces = null; // per cap: the colour buffer and one entry per face
+  var currentKey = "icosahedron";
   var currentSeparation = 0;
 
   function clearScene(){
@@ -381,9 +455,19 @@
     var partition = computeFacePartition(data.faces, data.cycle);
     var compOf = partition.compOf;
 
+    // When in the walk each cycle edge is finished, so a face can be told
+    // when the seam has reached it. A face is claimed by the FIRST of its
+    // edges the walk cuts; a face the cycle never touches -- none of ours,
+    // but the rule has to say something -- waits until the loop closes.
+    var edgeStep = {};
+    for (var c = 0; c < data.cycle.length; c++){
+      edgeStep[edgeKey(data.cycle[c], data.cycle[(c + 1) % data.cycle.length])] = c + 1;
+    }
+
     var posArrays = [[], []];
     var faceCounts = [0, 0];
     var centroidSum = [new THREE.Vector3(), new THREE.Vector3()];
+    var faceSpans = [[], []];
 
     data.faces.forEach(function(face, fi){
       var g = compOf[fi];
@@ -393,42 +477,127 @@
       centroidSum[g].add(faceCentroid);
       faceCounts[g]++;
 
+      var paintAt = data.cycle.length;
+      for (var k = 0; k < face.length; k++){
+        var st = edgeStep[edgeKey(face[k], face[(k + 1) % face.length])];
+        if (st !== undefined) paintAt = Math.min(paintAt, st);
+      }
+
+      var start = posArrays[g].length / 3;
       triangulateFace(face).forEach(function(tri){
         tri.forEach(function(vi){
           var p = positions[vi];
           posArrays[g].push(p.x, p.y, p.z);
         });
       });
+      faceSpans[g].push({ face: fi, start: start,
+                          count: posArrays[g].length / 3 - start,
+                          paintAt: paintAt, centroid: faceCentroid.clone() });
     });
 
     var directions = centroidSum.map(function(sum, g){
       return sum.clone().divideScalar(faceCounts[g] || 1).normalize();
     });
 
+    // The two faces a strip ends on: in a cap every face has two in-cap
+    // neighbours except the two at the ends, which have one. Those are the
+    // faces the printed model inlays, and the faces where the two strips
+    // meet across the seam.
+    var endFaces = {};
+    data.faces.forEach(function(face, fi){
+      if (partition.adj[fi].length === 1) endFaces[fi] = true;
+    });
+
     var groups = [];
+    var seamEdges = [];
+    var seamDots = [];
+    var faceBuffers = [];
+    var inlays = [];
     for (var g = 0; g < 2; g++){
       var container = new THREE.Group();
 
       var geo = new THREE.BufferGeometry();
       geo.setAttribute("position", new THREE.Float32BufferAttribute(posArrays[g], 3));
+      // Per-vertex colour, so a single face can change colour on its own
+      // without splitting the cap into twenty meshes. This is what lets the
+      // trace PAINT the solid: every face starts neutral and takes its cap's
+      // colour at the moment the seam cuts past it.
+      geo.setAttribute("color", new THREE.Float32BufferAttribute(
+        new Float32Array(posArrays[g].length), 3));
       geo.computeVertexNormals();
       var mat = new THREE.MeshStandardMaterial({
-        color: groupColors[g], side: THREE.DoubleSide,
+        vertexColors: true, side: THREE.DoubleSide,
         flatShading: true, roughness: 0.55, metalness: 0.05
       });
       container.add(new THREE.Mesh(geo, mat));
+      faceBuffers.push({ attr: geo.getAttribute("color"), spans: faceSpans[g], cap: g });
 
-      var linePts = data.cycle.map(function(vi){ return positions[vi].clone(); });
-      var lineGeo = new THREE.BufferGeometry().setFromPoints(linePts);
-      var lineMat = new THREE.LineBasicMaterial({ color: 0xffd54a, linewidth: 2 });
-      container.add(new THREE.LineLoop(lineGeo, lineMat));
-
-      var vertMat = new THREE.MeshBasicMaterial({ color: 0xfff2c8 });
-      data.cycle.forEach(function(vi){
-        var m = new THREE.Mesh(sphereGeo, vertMat);
-        m.position.copy(positions[vi]);
-        container.add(m);
+      // The seam is real geometry, one tube per cycle edge, not a line.
+      // THREE.LineBasicMaterial's linewidth is ignored by every WebGL core
+      // profile, so the "2px" line this used to be always drew one pixel --
+      // and this line is the whole point of the page, so it gets to be as
+      // thick as the reader wants. Tubes also let it draw ITSELF, edge by
+      // edge, which is what the trace does.
+      //
+      // Both caps carry their own copy, because both caps really do keep
+      // the whole cycle on their rim -- that is the claim in the header.
+      // Cap B's is a hair thinner so the two do not z-fight where they
+      // coincide at zero separation.
+      var seamMat = new THREE.MeshStandardMaterial({
+        color: 0xffb03a, roughness: 0.4, metalness: 0.0    // --seam
       });
+      var dotMat = new THREE.MeshBasicMaterial({ color: 0xffd9a0 });
+      var shrink = (g === 1) ? 0.94 : 1.0;
+
+      data.cycle.forEach(function(vi, k){
+        var a = positions[vi];
+        var b = positions[data.cycle[(k + 1) % data.cycle.length]];
+        var dir = b.clone().sub(a);
+        var len = dir.length();
+        dir.normalize();
+        var tube = new THREE.Mesh(cylGeo, seamMat);
+        tube.quaternion.setFromUnitVectors(UP, dir);
+        container.add(tube);
+        seamEdges.push({ mesh: tube, a: a.clone(), dir: dir, len: len,
+                         step: k, shrink: shrink });
+
+        var dot = new THREE.Mesh(sphereGeo, dotMat);
+        dot.position.copy(a);
+        container.add(dot);
+        seamDots.push({ mesh: dot, step: k, shrink: shrink });
+      });
+
+      // The yin-yang inlay: on each of the strip's two end faces, a scaled
+      // copy of that face in the OTHER cap's colour, lifted clear of the
+      // surface so it cannot z-fight. Same 0.40 as the printed part.
+      if (PALETTES[paletteName].inlay){
+        faceSpans[g].forEach(function(span){
+          if (!endFaces[span.face]) return;
+          var face = data.faces[span.face];
+          var pts = face.map(function(vi){
+            return positions[vi].clone().sub(span.centroid)
+                   .multiplyScalar(INLAY_SCALE).add(span.centroid);
+          });
+          var n = new THREE.Vector3().subVectors(pts[1], pts[0])
+                  .cross(new THREE.Vector3().subVectors(pts[2], pts[0])).normalize();
+          if (n.dot(span.centroid) < 0) n.negate();
+          pts.forEach(function(q){ q.addScaledVector(n, INLAY_LIFT); });
+
+          var verts = [];
+          for (var t = 1; t < pts.length - 1; t++){
+            [pts[0], pts[t], pts[t + 1]].forEach(function(q){ verts.push(q.x, q.y, q.z); });
+          }
+          var ig = new THREE.BufferGeometry();
+          ig.setAttribute("position", new THREE.Float32BufferAttribute(verts, 3));
+          ig.computeVertexNormals();
+          var im = new THREE.Mesh(ig, new THREE.MeshStandardMaterial({
+            color: PALETTES[paletteName].caps[1 - g],
+            side: THREE.DoubleSide, flatShading: true, roughness: 0.55
+          }));
+          container.add(im);
+          inlays.push({ mesh: im, paintAt: span.paintAt });
+        });
+      }
 
       scene.add(container);
       groups.push(container);
@@ -436,7 +605,13 @@
 
     currentGroups = groups;
     currentDirections = directions;
+    currentSeam = { edges: seamEdges, dots: seamDots, steps: data.cycle.length,
+                    path: data.cycle.map(function(vi){ return positions[vi].clone(); }) };
+    currentFaces = { buffers: faceBuffers, inlays: inlays };
+    traceT = 0;
     applySeparation(currentSeparation);
+    applySeam();
+    applyFaces();
 
     document.getElementById("stats").innerHTML =
       "<b>" + data.vertices.length + "</b> vertices &middot; " +
@@ -478,6 +653,24 @@
     return chosen || fallback || d.stl.sizes[0];
   }
 
+  // A socket is a fixed number of millimetres and the face it sits on is
+  // not, so whether the magnets fit is a question about this SIZE. Saying
+  // nothing when they do not fit reads as an oversight, and the answer is
+  // different for a solid that would fit them if you went bigger and one
+  // whose faces are too narrow at every rung -- the d10's kites never have
+  // room -- so the note has to know which it is looking at.
+  function magnetNote(d, rung){
+    if (rung.sockets) {
+      return " &middot; takes " + (2 * rung.sockets) + " magnets, 4 &times; 2mm";
+    }
+    var fitsSomewhere = d.stl.sizes.some(function(r){ return r.sockets > 0; });
+    return fitsSomewhere
+      ? " &middot; no magnets at this size &mdash; the faces are too small for a" +
+        " 4mm socket, but a larger one has room"
+      : " &middot; no magnets at any size &mdash; this solid's faces are too" +
+        " narrow for a 4mm socket";
+  }
+
   function showDownloads(key){
     downloadList.innerHTML = "";
     var all = window.DOWNLOADS || [];
@@ -490,7 +683,7 @@
     downloadList.appendChild(fileLink(
       d.net.path, "PDF", "Fold-up net",
       "both strips of " + d.strip + " faces at " + d.net.edge.toFixed(1) +
-      "mm edges &middot; print at 100%"));
+      "mm edges &middot; A4 or Letter, print at 100%"));
     var rung = pickRung(d);
     var row = document.createElement("div");
     row.className = "sizeRow";
@@ -512,7 +705,10 @@
     downloadList.appendChild(fileLink(
       rung.path, "STL", "3D-print strip",
       "one part, printed twice &middot; " + rung.edge.toFixed(1) + "mm edges &middot; " +
-      "needs " + Math.ceil(rung.bed[0]) + " &times; " + Math.ceil(rung.bed[1]) + "mm of bed"));
+      "needs " + Math.ceil(rung.bed[0]) + " &times; " + Math.ceil(rung.bed[1]) + "mm of bed" +
+      magnetNote(d, rung) +
+      (rung.inlays ? " &middot; plus " + rung.inlays +
+                     " inlays per cap, in a contrasting filament" : "")));
     var warn = document.createElement("div");
     warn.className = "sizeRow";
     warn.innerHTML = "Pick the size here, not in the slicer: the hinge is a fixed " +
@@ -522,6 +718,68 @@
     d.extras.forEach(function(e){
       downloadList.appendChild(fileLink(e.path, "PDF", e.label, e.note));
     });
+  }
+
+  // One place decides what the seam looks like, whether the thickness moved,
+  // the trace advanced, or a new solid was built -- so the tubes, the vertex
+  // dots and the walk cannot end up disagreeing about how far round it is.
+  function applySeam(){
+    if (!currentSeam) return;
+    var r = SEAM_R * seamWidth;
+    var dotScale = Math.max(1, (r * 1.45) / DOT_R);
+    currentSeam.edges.forEach(function(e){
+      var grown = tracing ? Math.min(1, Math.max(0, traceT - e.step)) : 1;
+      e.mesh.visible = (r > 0 && grown > 0);
+      if (!e.mesh.visible) return;
+      var len = e.len * grown;
+      e.mesh.scale.set(r * e.shrink, len, r * e.shrink);
+      e.mesh.position.copy(e.a).addScaledVector(e.dir, len / 2);
+    });
+    currentSeam.dots.forEach(function(d){
+      d.mesh.visible = (r > 0 && (!tracing || traceT >= d.step));
+      d.mesh.scale.setScalar(dotScale * d.shrink);
+    });
+  }
+
+  // Which faces are painted, and which are still waiting for the seam.
+  // Called from the same places applySeam is, for the same reason.
+  var _c = new THREE.Color();
+  function applyFaces(){
+    if (!currentFaces) return;
+    var caps = PALETTES[paletteName].caps;
+    currentFaces.buffers.forEach(function(buf){
+      var arr = buf.attr.array;
+      buf.spans.forEach(function(span){
+        _c.setHex((tracing && traceT < span.paintAt) ? NEUTRAL : caps[buf.cap]);
+        for (var i = span.start; i < span.start + span.count; i++){
+          arr[i * 3] = _c.r; arr[i * 3 + 1] = _c.g; arr[i * 3 + 2] = _c.b;
+        }
+      });
+      buf.attr.needsUpdate = true;
+    });
+    currentFaces.inlays.forEach(function(inl){
+      inl.mesh.visible = !(tracing && traceT < inl.paintAt);
+    });
+  }
+
+  function applyPalette(){
+    var pal = PALETTES[paletteName];
+    scene.background = new THREE.Color(pal.bg);
+    ambient.intensity = pal.amb;
+    key1.intensity = pal.k1;
+    key2.intensity = pal.k2;
+    document.documentElement.style.setProperty("--groupA", pal.css[0]);
+    document.documentElement.style.setProperty("--groupB", pal.css[1]);
+    buildShape(currentKey);      // the inlays exist or they do not
+  }
+
+  // Where the walk's head is, as a point on the cycle.
+  function seamPoint(t){
+    var path = currentSeam.path, n = path.length;
+    var tt = Math.max(0, Math.min(n, t));
+    var i = Math.floor(tt) % n;
+    var f = tt - Math.floor(tt);
+    return path[i].clone().lerp(path[(i + 1) % n], f);
   }
 
   function applySeparation(value){
@@ -545,8 +803,15 @@
   });
   select.value = "icosahedron";
   select.addEventListener("change", function(){
-    buildShape(select.value);
-    showDownloads(select.value);
+    currentKey = select.value;
+    buildShape(currentKey);
+    showDownloads(currentKey);
+  });
+
+  var paletteSelect = document.getElementById("paletteSelect");
+  paletteSelect.addEventListener("change", function(){
+    paletteName = paletteSelect.value;
+    applyPalette();
   });
 
   var sepSlider = document.getElementById("sepSlider");
@@ -555,6 +820,35 @@
     var v = parseFloat(sepSlider.value);
     sepValue.textContent = v.toFixed(2);
     applySeparation(v);
+  });
+
+  var seamSlider = document.getElementById("seamSlider");
+  var seamValue = document.getElementById("seamValue");
+  seamSlider.addEventListener("input", function(){
+    seamWidth = parseFloat(seamSlider.value);
+    seamValue.textContent = seamWidth.toFixed(2);
+    applySeam();
+  });
+
+  var traceCycle = document.getElementById("traceCycle");
+  traceCycle.addEventListener("change", function(){
+    tracing = traceCycle.checked;
+    traceT = 0;
+    applySeam();
+    applyFaces();
+  });
+
+  // Riding the seam and dragging the camera are the same control, so the
+  // orbit is handed over rather than fought over; the zoom stays yours.
+  var followSeam = document.getElementById("followSeam");
+  followSeam.addEventListener("change", function(){
+    following = followSeam.checked;
+    camT = tracing ? traceT : 0;
+    controls.enableRotate = !following;
+    if (following && autoRotate.checked){
+      autoRotate.checked = false;
+      controls.autoRotate = false;
+    }
   });
 
   var autoRotate = document.getElementById("autoRotate");
@@ -571,8 +865,30 @@
   }
   window.addEventListener("resize", resize);
 
+  var lastFrame = performance.now();
   function animate(){
     requestAnimationFrame(animate);
+    var now = performance.now();
+    var dt = Math.min(0.1, (now - lastFrame) / 1000);   // clamped, so a
+    lastFrame = now;                                    // backgrounded tab
+                                                        // does not jump
+    if (tracing && currentSeam){
+      traceT += dt * TRACE_SPEED;
+      if (traceT > currentSeam.steps + TRACE_HOLD) traceT = 0;
+      applySeam();
+      applyFaces();
+    }
+    if (following && currentSeam){
+      camT = tracing ? traceT : camT + dt * TRACE_SPEED;
+      // Turn the DIRECTION and keep the radius. Lerping between two points
+      // on a sphere walks the chord, which lands inside it, so doing this
+      // the obvious way pulls the camera a little closer every frame and
+      // ends up inside the solid.
+      var dist = camera.position.distanceTo(controls.target);
+      var dir = camera.position.clone().sub(controls.target).normalize();
+      dir.lerp(seamPoint(camT).normalize(), 1 - Math.exp(-2.5 * dt)).normalize();
+      camera.position.copy(controls.target).addScaledVector(dir, dist);
+    }
     controls.update();
     renderer.render(scene, camera);
   }

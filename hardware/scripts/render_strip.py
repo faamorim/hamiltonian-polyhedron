@@ -30,7 +30,15 @@ def shaded(ax, tris, light=(0.35, 0.5, 0.79), two_sided=False):
     lam = np.clip(np.abs(lam) if two_sided else lam, 0, 1)
     shade = 0.25 + 0.75 * lam
     colours = np.stack([shade * 0.42, shade * 0.55, shade * 0.72, np.ones_like(shade)], 1)
-    ax.add_collection3d(Poly3DCollection(tris, facecolors=colours, edgecolors="none"))
+    # Each triangle gets its own colour as an EDGE too. Without that,
+    # matplotlib antialiases every triangle against the background and the
+    # seams do not cancel, so a flat surface fanned into long thin triangles
+    # -- which is exactly what a face with holes in it becomes -- comes out
+    # streaked, and the streaks look like geometry. They are not: measured
+    # off the mesh, every rim-top vertex sits at one height to the last
+    # decimal place, and the coplanar triangles have zero overlap.
+    ax.add_collection3d(Poly3DCollection(tris, facecolors=colours,
+                                         edgecolors=colours, linewidths=0.4))
 
 
 def view(ax, tris, elev, azim, title, light=(0.35, 0.5, 0.79)):
@@ -52,7 +60,7 @@ def view(ax, tris, elev, azim, title, light=(0.35, 0.5, 0.79)):
 
 if __name__ == "__main__":
     path = G.SOLID.strips()[0]
-    solid, face_2d = G.build_strip(path)
+    solid, face_2d, _ = G.build_strip(path)
     mesh = solid.to_mesh()
     tris = np.asarray(mesh.vert_properties)[:, :3][np.asarray(mesh.tri_verts)]
 
