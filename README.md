@@ -63,6 +63,30 @@ You will also need, per solid:
   two faces where a strip ends, in the other half's colour. Four per solid.
   They drop into shallow pockets and glue flush.
 
+## Assembling one
+
+The STL holds the strip, its lids and its inlays side by side, and you print
+the same file twice. Print **one copy in each colour** — the two prints then
+contain exactly the parts each other needs:
+
+1. Print the file twice, once in each filament. Flat on the bed, no supports,
+   no raft under the strip. Do not scale it.
+2. **Swap the inlays between the two prints.** Each copy comes with two, and
+   each body needs two of the other colour, so the swap is exact. Glue them
+   into the shallow pockets on the outside of the two faces at the ends of
+   each strip; they sit flush.
+3. Glue a magnet into each socket, entered from the inside face. Check the
+   polarity against its partner across the seam **before** the glue sets —
+   two sockets that repel are a solid that will not close.
+4. Press the lids into the rebates over the sockets. They are cosmetic; the
+   magnet is already held by plastic and glue.
+5. Fold each strip along its thinned hinges, one fold at a time, until the
+   walls meet. Take your time on the first fold of each hinge: the plastic
+   yields once and then stays bent.
+6. Bring the two halves together. They interlock — no straight pull separates
+   them, so close them by hinging one into the other, and the magnets will
+   pull the last of the way.
+
 ## Credit
 
 The object this extends is ***Desconstrucció d'un dodecàedre*** by
