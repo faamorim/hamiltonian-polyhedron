@@ -61,7 +61,13 @@ if __name__ == "__main__":
         rungs = []
         for size in SIZES_MM:
             log = run("gen_flat_strip.py", key, str(size))
-            fp = re.search(r"cap0: .*footprint ([\d.]+) x ([\d.]+)", log)
+            # The SHIPPED footprint, off the line that reports the written
+            # file -- not cap0's. The strip is not the whole file: the lids
+            # and the inlays print beside it, and quoting the strip alone
+            # told the reader the tetrahedron at 63mm needed 103 x 60mm of
+            # bed for a part that is actually 103 x 87mm. The number on the
+            # page is a promise about the file you are about to download.
+            fp = re.search(r"\((\d+) x (\d+)mm; print TWO", log)
             sock = re.search(r"(\d+) magnet sockets", log)
             inlay = re.search(r"the (\d+) inlays in the other colour", log)
             rungs.append({
