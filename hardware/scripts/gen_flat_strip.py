@@ -60,8 +60,9 @@ dodecaedre, in which a solid unzips along a continuous path into two
 complementary halves -- a yin-yang in three dimensions. Two features carry
 that reading and are not decoration: the magnets at the seam, which let the
 halves be taken apart and put back without a catch anywhere on the outside,
-and the inlay, a contrasting insert on EVERY face of both halves, so each
-half visibly holds a piece of the other everywhere rather than at its ends.
+and the inlay, a contrasting insert on the face at each end of each strip,
+so that each half visibly holds a piece of the other. Those four faces are
+where the two strips' ends meet, two pairs at opposite poles of the solid.
 
 Requires: pip install manifold3d numpy
 
@@ -577,13 +578,26 @@ assert_no_early_jam()
 # Josep Rey Nadal's Desconstruccio d'un dodecaedre, the piece this project
 # extends, carries a contrasting inlay on EVERY face of both halves: the
 # walnut cap has a light pentagon on all ten faces and the light cap a
-# walnut one. That is the yin-yang reading made literal -- each half holds a
-# piece of the other everywhere, not only where the two strips meet -- and
-# it is why this is a pocket per face rather than the two end marks an
-# earlier note planned.
+# walnut one. Built that way first, and then both were folded up and
+# rendered side by side -- hardware/tests/inlay_assembled_icosahedron.png.
+# Twenty marks read as a pattern. The yin-yang depends on the mark being
+# SINGULAR: one dot in each half, so the eye reads "this half contains that
+# one" rather than "this solid is decorated". Repeat it ten times per cap
+# and the symbol becomes a texture.
+#
+# So the inlay goes on the two faces at the ENDS of each strip, which is not
+# a pick but a place. Measured on the icosahedron: a strip's two end faces
+# are exactly 180 degrees apart, and each one lands ADJACENT to an end face
+# of the other strip, sharing an edge with it. The finished solid therefore
+# carries two yin-yang pairs at opposite poles -- turn it over and find it
+# again -- and each pair sits on the end-to-end edge that seeds the magnets,
+# so the dots mark where the two halves latch. The other faces stay blank,
+# which lets the seam read as the one unbroken line it is.
+#
+# INLAY_FACES is the whole switch, if the faithful version is ever wanted.
 #
 # The inlay is a scaled copy of its own face, so a triangular solid gets
-# triangles and the d10's kites get kites, and it is one part repeated: ten
+# triangles and the d10's kites get kites, and it is one part repeated:
 # identical inserts ride beside the strip like the lids do.
 #
 # The pocket goes into the OUTER skin, which is the face that prints against
@@ -595,6 +609,8 @@ assert_no_early_jam()
 # icosahedron caps a centred inlay at 0.43 of the face. At 0.4mm the socket
 # stops reaching the pocket at all and the limit goes back to 0.81, set by
 # the seam and the hinge alone. So the depth is chosen by the socket.
+INLAY_FACES = "ends"        # "ends" -- the two faces each strip ends on
+                            # "all"  -- every face, the way Nadal does it
 INLAY_SCALE = 0.40          # of the face, which is about where Nadal's sits
 INLAY_DEPTH = 0.4           # mm into the outer skin; see above
 INLAY_GAP = 0.15            # mm clearance round the insert
@@ -608,6 +624,13 @@ INLAY_FLOOR = 0.3           # mm it must leave over itself, to a socket. Less
                             # one measurement a mesh boolean cannot be trusted
                             # to call.
 INLAY_PROUD = 0.4           # mm the cutter runs below the outer surface
+
+
+def inlay_faces(path):
+    """Which faces of a strip take an inlay. Both ends of a two-face strip
+    are the same two faces, so the tetrahedron gets every face either way."""
+    assert INLAY_FACES in ("ends", "all"), f"INLAY_FACES is {INLAY_FACES!r}"
+    return set(path) if INLAY_FACES == "all" else {path[0], path[-1]}
 
 
 def inlay_outline(pts2d, shrink=0.0):
@@ -665,7 +688,7 @@ def inlay_clearance(face_2d, path):
     above the pocket, not beside it, and inlay_guard covers them."""
     fold_edges = compute_fold_edges(SOLID.faces, path)
     worst = math.inf
-    for fi in path:
+    for fi in sorted(inlay_faces(path)):
         pts = dict(face_2d[fi])
         face = SOLID.faces[fi]
         corners = np.array(
@@ -818,7 +841,7 @@ def build_strip(path, edge_len=TARGET_EDGE):
     # and last, the inlay: one pocket per face, cut after the seams and the
     # sockets so that what it is checked against is the finished body
     pockets = []
-    for fi in path:
+    for fi in sorted(inlay_faces(path)):
         pts2d = [q for _, q in face_2d[fi]]
         guard = inlay_guard(pts2d)
         left = (guard - solid).volume()
@@ -1018,7 +1041,8 @@ if __name__ == "__main__":
         print(f"no magnet sockets: one would come within {SOCKET_GAP:.2f}mm of a fold's "
               f"miter plane at this size. A socket is absolute millimetres and the "
               f"face is not, so a larger size has room.")
-    print(f"inlay on every face at {INLAY_SCALE:.2f} of it, {INLAY_DEPTH:.1f}mm deep: "
+    print(f"inlay on {len(inlay_faces(path))} of the cap's {len(path)} faces at "
+          f"{INLAY_SCALE:.2f} of the face, {INLAY_DEPTH:.1f}mm deep: "
           f"clears the nearest edge of its face by {inlay_clearance(face_2d, path):.2f}mm, "
           f"with at least {INLAY_WALL:.1f}mm of body beside the pocket and "
           f"{INLAY_FLOOR:.1f}mm over it")
