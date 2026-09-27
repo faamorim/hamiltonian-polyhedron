@@ -581,23 +581,31 @@ def build_strip(path, edge_len=TARGET_EDGE):
                 pa, pb = pb, pa
             seams.append((e, pa, pb))
 
-    # Pads first, so the seam cuts trim them along with everything else: a
-    # pad stands above the rim, and a cut sized for the rim would leave its
-    # front lip proud and detached.
-    lids, tallest = [], TOP_Z
+    # A pad stands above the rim, so it needs a taller seam cut than the rim
+    # does -- but ONLY the pad does. Widening every cut to reach it made each
+    # one longer as well, enough to overrun a concave corner of the net and
+    # bite into the face beyond: 24.26mm3 gone from the strip in four lumps.
+    # So the tall cut is applied to the PADS alone, and the body keeps the
+    # cut sized for the rim, which is the one that was already checked.
+    lids, pads, tallest = [], [], TOP_Z
     for e, pa, pb in seams:
         if e not in SOCKET_KEYS:
             continue
         m = miter_of(e)
         pad, _, _, lid = socket_parts(m)
-        solid += at_edge(pad, pa, pb)
+        pads.append(at_edge(pad, pa, pb))
         lids.append(lid)
         tallest = max(tallest, pad_top(m))
+    if pads:
+        tall_cut = m3d.Manifold.batch_boolean(
+            [seam_cut(pa, pb, miter_of(e), up_to=tallest) for e, pa, pb in seams],
+            m3d.OpType.Add)
+        solid += m3d.Manifold.batch_boolean(pads, m3d.OpType.Add) - tall_cut
 
     # then miter every seam, base and all, so the two caps meet on the
     # bisector instead of on a square ledge
     solid -= m3d.Manifold.batch_boolean(
-        [seam_cut(pa, pb, miter_of(e), up_to=tallest) for e, pa, pb in seams],
+        [seam_cut(pa, pb, miter_of(e)) for e, pa, pb in seams],
         m3d.OpType.Add)
 
     # then hollow the pads out

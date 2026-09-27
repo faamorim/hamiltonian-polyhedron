@@ -131,7 +131,7 @@ window.DOWNLOADS = [
             79.8,
             26.5
           ],
-          "turn": 180.0,
+          "turn": 0.0,
           "sockets": 4
         },
         {
@@ -153,7 +153,7 @@ window.DOWNLOADS = [
             125.8,
             41.8
           ],
-          "turn": 0.0,
+          "turn": 180.0,
           "sockets": 4
         }
       ]
@@ -214,8 +214,8 @@ window.DOWNLOADS = [
             67.8,
             58.8
           ],
-          "turn": 240.0,
-          "sockets": 6
+          "turn": 60.0,
+          "sockets": 2
         },
         {
           "mm": 50.0,
@@ -226,7 +226,7 @@ window.DOWNLOADS = [
             73.5
           ],
           "turn": 60.0,
-          "sockets": 6
+          "sockets": 2
         },
         {
           "mm": 63.0,
@@ -236,8 +236,8 @@ window.DOWNLOADS = [
             106.9,
             92.7
           ],
-          "turn": 240.0,
-          "sockets": 6
+          "turn": 60.0,
+          "sockets": 2
         }
       ]
     },
@@ -465,7 +465,7 @@ window.DOWNLOADS = [
             79.4
           ],
           "turn": 120.0,
-          "sockets": 4
+          "sockets": 6
         },
         {
           "mm": 50.0,
@@ -476,7 +476,7 @@ window.DOWNLOADS = [
             99.3
           ],
           "turn": 120.0,
-          "sockets": 4
+          "sockets": 6
         },
         {
           "mm": 63.0,
@@ -487,7 +487,7 @@ window.DOWNLOADS = [
             125.1
           ],
           "turn": 300.0,
-          "sockets": 4
+          "sockets": 6
         }
       ]
     },

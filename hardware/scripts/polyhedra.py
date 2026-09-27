@@ -17,6 +17,7 @@ icosahedron vertex), so it inherits data that is already verified rather
 than adding twenty fresh coordinates to get wrong.
 """
 
+import itertools
 import math
 import numpy as np
 
@@ -321,35 +322,71 @@ def end_to_end(solid):
                   if own[0].get(e) in ends[0] and own[1].get(e) in ends[1])
 
 
-def socket_edges(solid, want=4):
+def socket_edges(solid, max_run=2):
     """Which cycle edges get a magnet, as edge keys.
 
+    The measure is how many faces sit between one magnet and the next ALONG
+    THE STRIP, not how evenly the magnets are spread round the seam.
+
+    That is not obvious and it is the opposite of what it looks like. The two
+    caps cannot be drawn apart as rigid bodies at all -- the mating normals
+    round the seam positively span space, so every rigid motion drives part
+    of one cap into the other, by 0.30 of a unit screw at worst on the
+    icosahedron. That is what interlocked means, and it means the magnets are
+    not holding against a pull. What they hold against is the cap FLEXING,
+    and a cap is a chain of stiff faces on thin living hinges: the folds
+    cannot close past their contact faces but nothing stops them opening. So
+    the span that gapes is a run of faces along the strip with no magnet in
+    it, and four magnets spread perfectly evenly round the seam leave a run
+    of four on the icosahedron while six in the right places leave two.
+
     Starts from the joints where the two strips' ends meet -- with their
-    whole orbits, since an orbit is indivisible -- and then adds orbits to
-    spread the rest evenly round the cycle. `want` is a floor, not a cap: an
-    orbit cannot be taken in part, and the strip-end joints are never
-    dropped to hit a number."""
+    whole orbits, since an orbit cannot be taken in part -- and adds orbits
+    until no run is longer than max_run, preferring the fewest sockets and
+    then the most even spacing round the seam.
+    """
     orbits, places, cyc = socket_orbits(solid)
     ends = set(end_to_end(solid))
-    chosen = [o for o in orbits if set(o) & ends]
+    seed = [o for o in orbits if set(o) & ends]
     rest = [o for o in orbits if not set(o) & ends]
+    caps = solid.strips()
+    at = {e: i for i, e in enumerate(cyc)}
+    owner = []
+    for cap in caps:
+        d = {}
+        for e, fi in seam_edges(solid, cap):
+            d.setdefault(at[e], set()).add(cap.index(fi))
+        owner.append(d)
 
-    def gaps(sel):
-        s = sorted(sel)
-        return min((s[(i + 1) % len(s)] - s[i]) % len(cyc) or len(cyc)
-                   for i in range(len(s))) if len(s) > 1 else len(cyc)
+    def worst_run(idx):
+        out = 0
+        for d in owner:
+            pinned = {f for i in idx for f in d[i]}
+            run = 0
+            for k in range(len(caps[0])):
+                run = 0 if k in pinned else run + 1
+                out = max(out, run)
+        return out
 
-    have = set(sum(chosen, []))
-    while len(have) < want and rest:
-        best = max(rest, key=lambda o: gaps(have | set(o)))
-        rest.remove(best)
-        chosen.append(best)
-        have = set(sum(chosen, []))
+    def seam_gap(idx):
+        return max((idx[(i + 1) % len(idx)] - idx[i]) % len(cyc)
+                   for i in range(len(idx))) if len(idx) > 1 else len(cyc)
+
+    best = None
+    for r in range(len(rest) + 1):
+        for combo in itertools.combinations(rest, r):
+            idx = sorted(sum(seed, []) + [i for o in combo for i in o])
+            if not idx:
+                continue
+            key = (max(0, worst_run(idx) - max_run), len(idx), seam_gap(idx))
+            if best is None or key < best[0]:
+                best = (key, idx)
+    idx = best[1]
 
     for pl in places:
-        assert {pl[i] for i in have} == have, \
+        assert {pl[i] for i in idx} == set(idx), \
             f"{solid.name}: the chosen sockets are not one part printed twice"
-    return {cyc[i] for i in sorted(have)}, sorted(have)
+    return {cyc[i] for i in idx}, idx
 
 
 def compute_fold_edges(faces, path):
