@@ -647,6 +647,24 @@
     return chosen || fallback || d.stl.sizes[0];
   }
 
+  // A socket is a fixed number of millimetres and the face it sits on is
+  // not, so whether the magnets fit is a question about this SIZE. Saying
+  // nothing when they do not fit reads as an oversight, and the answer is
+  // different for a solid that would fit them if you went bigger and one
+  // whose faces are too narrow at every rung -- the d10's kites never have
+  // room -- so the note has to know which it is looking at.
+  function magnetNote(d, rung){
+    if (rung.sockets) {
+      return " &middot; takes " + (2 * rung.sockets) + " magnets, 4 &times; 2mm";
+    }
+    var fitsSomewhere = d.stl.sizes.some(function(r){ return r.sockets > 0; });
+    return fitsSomewhere
+      ? " &middot; no magnets at this size &mdash; the faces are too small for a" +
+        " 4mm socket, but a larger one has room"
+      : " &middot; no magnets at any size &mdash; this solid's faces are too" +
+        " narrow for a 4mm socket";
+  }
+
   function showDownloads(key){
     downloadList.innerHTML = "";
     var all = window.DOWNLOADS || [];
@@ -682,8 +700,7 @@
       rung.path, "STL", "3D-print strip",
       "one part, printed twice &middot; " + rung.edge.toFixed(1) + "mm edges &middot; " +
       "needs " + Math.ceil(rung.bed[0]) + " &times; " + Math.ceil(rung.bed[1]) + "mm of bed" +
-      (rung.sockets ? " &middot; takes " + (2 * rung.sockets) +
-                      " magnets, 4 &times; 2mm" : "") +
+      magnetNote(d, rung) +
       (rung.inlays ? " &middot; plus " + rung.inlays +
                      " inlays per cap, in a contrasting filament" : "")));
     var warn = document.createElement("div");
