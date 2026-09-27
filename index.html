@@ -142,9 +142,20 @@
         </div>
         <input type="range" id="sepSlider" min="0" max="2.5" step="0.01" value="0">
       </div>
+      <div class="field">
+        <div class="row">
+          <label for="seamSlider" style="margin-bottom:0">Seam thickness</label>
+          <span class="value" id="seamValue">1.00</span>
+        </div>
+        <input type="range" id="seamSlider" min="0" max="3" step="0.05" value="1">
+      </div>
       <div class="field checkbox-row">
         <input type="checkbox" id="autoRotate">
         <label for="autoRotate" style="margin:0; text-transform:none; letter-spacing:normal;">Auto-rotate</label>
+      </div>
+      <div class="field checkbox-row">
+        <input type="checkbox" id="traceCycle">
+        <label for="traceCycle" style="margin:0; text-transform:none; letter-spacing:normal;">Trace the cycle</label>
       </div>
       <div id="legend">
         <div><span class="swatch" style="background:var(--groupA)"></span>Cap A</div>
@@ -361,11 +372,21 @@
   scene.add(key2);
 
   var sphereGeo = new THREE.SphereGeometry(0.06, 16, 16);
+  var DOT_R = 0.06;                                   // sphereGeo's own radius
+  var cylGeo = new THREE.CylinderGeometry(1, 1, 1, 14);   // unit tube along +y
+  var UP = new THREE.Vector3(0, 1, 0);
+  var SEAM_R = 0.035;      // world radius of the seam at thickness 1.00
+  var TRACE_SPEED = 2.0;   // cycle edges per second
+  var TRACE_HOLD = 1.2;    // edges' worth of pause on the closed loop
   var groupColors = [0xf6f1e6, 0x1d1e24];   // keep in step with --groupA / --groupB
   var TARGET_RADIUS = Math.sqrt(1 + PHI * PHI); // matches the icosahedron's circumradius, keeps shapes visually comparable
 
   var currentGroups = null;
   var currentDirections = null;
+  var currentSeam = null;
+  var seamWidth = 1.0;     // the slider
+  var tracing = false;
+  var traceT = 0;          // how far the walk has got, in cycle edges
   var currentSeparation = 0;
 
   function clearScene(){
@@ -414,6 +435,8 @@
     });
 
     var groups = [];
+    var seamEdges = [];
+    var seamDots = [];
     for (var g = 0; g < 2; g++){
       var container = new THREE.Group();
 
@@ -426,17 +449,39 @@
       });
       container.add(new THREE.Mesh(geo, mat));
 
-      var linePts = data.cycle.map(function(vi){ return positions[vi].clone(); });
-      var lineGeo = new THREE.BufferGeometry().setFromPoints(linePts);
-      // colour kept in step with --seam
-      var lineMat = new THREE.LineBasicMaterial({ color: 0xffb03a, linewidth: 2 });
-      container.add(new THREE.LineLoop(lineGeo, lineMat));
+      // The seam is real geometry, one tube per cycle edge, not a line.
+      // THREE.LineBasicMaterial's linewidth is ignored by every WebGL core
+      // profile, so the "2px" line this used to be always drew one pixel --
+      // and this line is the whole point of the page, so it gets to be as
+      // thick as the reader wants. Tubes also let it draw ITSELF, edge by
+      // edge, which is what the trace does.
+      //
+      // Both caps carry their own copy, because both caps really do keep
+      // the whole cycle on their rim -- that is the claim in the header.
+      // Cap B's is a hair thinner so the two do not z-fight where they
+      // coincide at zero separation.
+      var seamMat = new THREE.MeshStandardMaterial({
+        color: 0xffb03a, roughness: 0.4, metalness: 0.0    // --seam
+      });
+      var dotMat = new THREE.MeshBasicMaterial({ color: 0xffd9a0 });
+      var shrink = (g === 1) ? 0.94 : 1.0;
 
-      var vertMat = new THREE.MeshBasicMaterial({ color: 0xffd9a0 });
-      data.cycle.forEach(function(vi){
-        var m = new THREE.Mesh(sphereGeo, vertMat);
-        m.position.copy(positions[vi]);
-        container.add(m);
+      data.cycle.forEach(function(vi, k){
+        var a = positions[vi];
+        var b = positions[data.cycle[(k + 1) % data.cycle.length]];
+        var dir = b.clone().sub(a);
+        var len = dir.length();
+        dir.normalize();
+        var tube = new THREE.Mesh(cylGeo, seamMat);
+        tube.quaternion.setFromUnitVectors(UP, dir);
+        container.add(tube);
+        seamEdges.push({ mesh: tube, a: a.clone(), dir: dir, len: len,
+                         step: k, shrink: shrink });
+
+        var dot = new THREE.Mesh(sphereGeo, dotMat);
+        dot.position.copy(a);
+        container.add(dot);
+        seamDots.push({ mesh: dot, step: k, shrink: shrink });
       });
 
       scene.add(container);
@@ -445,7 +490,10 @@
 
     currentGroups = groups;
     currentDirections = directions;
+    currentSeam = { edges: seamEdges, dots: seamDots, steps: data.cycle.length };
+    traceT = 0;
     applySeparation(currentSeparation);
+    applySeam();
 
     document.getElementById("stats").innerHTML =
       "<b>" + data.vertices.length + "</b> vertices &middot; " +
@@ -537,6 +585,27 @@
     });
   }
 
+  // One place decides what the seam looks like, whether the thickness moved,
+  // the trace advanced, or a new solid was built -- so the tubes, the vertex
+  // dots and the walk cannot end up disagreeing about how far round it is.
+  function applySeam(){
+    if (!currentSeam) return;
+    var r = SEAM_R * seamWidth;
+    var dotScale = Math.max(1, (r * 1.45) / DOT_R);
+    currentSeam.edges.forEach(function(e){
+      var grown = tracing ? Math.min(1, Math.max(0, traceT - e.step)) : 1;
+      e.mesh.visible = (r > 0 && grown > 0);
+      if (!e.mesh.visible) return;
+      var len = e.len * grown;
+      e.mesh.scale.set(r * e.shrink, len, r * e.shrink);
+      e.mesh.position.copy(e.a).addScaledVector(e.dir, len / 2);
+    });
+    currentSeam.dots.forEach(function(d){
+      d.mesh.visible = (r > 0 && (!tracing || traceT >= d.step));
+      d.mesh.scale.setScalar(dotScale * d.shrink);
+    });
+  }
+
   function applySeparation(value){
     currentSeparation = value;
     if (!currentGroups) return;
@@ -570,6 +639,21 @@
     applySeparation(v);
   });
 
+  var seamSlider = document.getElementById("seamSlider");
+  var seamValue = document.getElementById("seamValue");
+  seamSlider.addEventListener("input", function(){
+    seamWidth = parseFloat(seamSlider.value);
+    seamValue.textContent = seamWidth.toFixed(2);
+    applySeam();
+  });
+
+  var traceCycle = document.getElementById("traceCycle");
+  traceCycle.addEventListener("change", function(){
+    tracing = traceCycle.checked;
+    traceT = 0;
+    applySeam();
+  });
+
   var autoRotate = document.getElementById("autoRotate");
   autoRotate.addEventListener("change", function(){
     controls.autoRotate = autoRotate.checked;
@@ -584,8 +668,18 @@
   }
   window.addEventListener("resize", resize);
 
+  var lastFrame = performance.now();
   function animate(){
     requestAnimationFrame(animate);
+    var now = performance.now();
+    var dt = Math.min(0.1, (now - lastFrame) / 1000);   // clamped, so a
+    lastFrame = now;                                    // backgrounded tab
+                                                        // does not jump
+    if (tracing && currentSeam){
+      traceT += dt * TRACE_SPEED;
+      if (traceT > currentSeam.steps + TRACE_HOLD) traceT = 0;
+      applySeam();
+    }
     controls.update();
     renderer.render(scene, camera);
   }
