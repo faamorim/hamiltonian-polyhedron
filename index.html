@@ -13,8 +13,9 @@
     --text:#e8e9ee;
     --text-dim:#9198ab;
     --accent:#ffd54a;
-    --groupA:#e0524b;
-    --groupB:#3fa7a0;
+    --seam:#ffb03a;
+    --groupA:#f6f1e6;
+    --groupB:#1d1e24;
   }
   *{box-sizing:border-box;}
   html,body{
@@ -64,6 +65,7 @@
   #legend{ font-size:0.82rem; line-height:1.5; }
   #legend .swatch{
     display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:6px;
+    border:1px solid var(--panel-border);
   }
   #stats{
     margin-top:6px; padding-top:14px; border-top:1px solid var(--panel-border);
@@ -147,7 +149,7 @@
       <div id="legend">
         <div><span class="swatch" style="background:var(--groupA)"></span>Cap A</div>
         <div><span class="swatch" style="background:var(--groupB)"></span>Cap B</div>
-        <div><span class="swatch" style="background:var(--accent)"></span>Hamiltonian cycle (seam)</div>
+        <div><span class="swatch" style="background:var(--seam)"></span>Hamiltonian cycle (seam)</div>
       </div>
       <div id="stats"></div>
       <div id="downloads">
@@ -332,7 +334,7 @@
   // ---- three.js scene ----
   var wrap = document.getElementById("canvas-wrap");
   var scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x12141c);
+  scene.background = new THREE.Color(0x0c0e13);
 
   var camera = new THREE.PerspectiveCamera(45, 1, 0.1, 100);
   camera.position.set(4.2, 3.2, 5.2);
@@ -344,16 +346,22 @@
   controls.enableDamping = true;
   controls.dampingFactor = 0.08;
 
-  scene.add(new THREE.AmbientLight(0xffffff, 0.55));
-  var key1 = new THREE.DirectionalLight(0xffffff, 0.8);
+  // Deliberately flat. The two caps are told apart by VALUE now, not by hue,
+  // and the faces are flat-shaded: with the lighting this scene used to have
+  // (ambient 0.55, a 0.8 key) the swing across a face was wider than the gap
+  // between the two caps, so the white cap's shadowed faces came out the same
+  // grey as the black cap's lit ones and the halves stopped separating.
+  // Raising these back up quietly undoes the palette.
+  scene.add(new THREE.AmbientLight(0xffffff, 0.80));
+  var key1 = new THREE.DirectionalLight(0xffffff, 0.30);
   key1.position.set(5, 6, 4);
   scene.add(key1);
-  var key2 = new THREE.DirectionalLight(0xffffff, 0.35);
+  var key2 = new THREE.DirectionalLight(0xffffff, 0.15);
   key2.position.set(-4, -3, -5);
   scene.add(key2);
 
   var sphereGeo = new THREE.SphereGeometry(0.06, 16, 16);
-  var groupColors = [0xe0524b, 0x3fa7a0];
+  var groupColors = [0xf6f1e6, 0x1d1e24];   // keep in step with --groupA / --groupB
   var TARGET_RADIUS = Math.sqrt(1 + PHI * PHI); // matches the icosahedron's circumradius, keeps shapes visually comparable
 
   var currentGroups = null;
@@ -420,10 +428,11 @@
 
       var linePts = data.cycle.map(function(vi){ return positions[vi].clone(); });
       var lineGeo = new THREE.BufferGeometry().setFromPoints(linePts);
-      var lineMat = new THREE.LineBasicMaterial({ color: 0xffd54a, linewidth: 2 });
+      // colour kept in step with --seam
+      var lineMat = new THREE.LineBasicMaterial({ color: 0xffb03a, linewidth: 2 });
       container.add(new THREE.LineLoop(lineGeo, lineMat));
 
-      var vertMat = new THREE.MeshBasicMaterial({ color: 0xfff2c8 });
+      var vertMat = new THREE.MeshBasicMaterial({ color: 0xffd9a0 });
       data.cycle.forEach(function(vi){
         var m = new THREE.Mesh(sphereGeo, vertMat);
         m.position.copy(positions[vi]);
