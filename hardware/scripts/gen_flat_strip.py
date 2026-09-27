@@ -55,11 +55,13 @@ means the same physical object across the six solids. The paper nets are
 already sized this way. An edge length is not comparable: a dodecahedron of
 22mm edges is nearly three times a tetrahedron of the same.
 
-NOT YET IMPLEMENTED, deliberately -- both wanted, neither urgent:
-  * recesses in the frustum floors for magnets at the seam;
-  * a shallow inset on the end triangle of each strip to take a contrasting
-    insert, so a black strip carries a white triangle and vice versa (the
-    yin-yang reading of the two interlocking caps).
+WHAT THE PIECE IS FOR. This extends Josep Rey Nadal's Desconstruccio d'un
+dodecaedre, in which a solid unzips along a continuous path into two
+complementary halves -- a yin-yang in three dimensions. Two features carry
+that reading and are not decoration: the magnets at the seam, which let the
+halves be taken apart and put back without a catch anywhere on the outside,
+and the inlay, a contrasting insert on EVERY face of both halves, so each
+half visibly holds a piece of the other everywhere rather than at its ends.
 
 Requires: pip install manifold3d numpy
 
@@ -571,6 +573,118 @@ TOP_Z = FACE_THICKNESS + WALL_HEIGHT
 assert_no_early_jam()
 
 
+# --- the yin-yang inlay ---------------------------------------------------
+# Josep Rey Nadal's Desconstruccio d'un dodecaedre, the piece this project
+# extends, carries a contrasting inlay on EVERY face of both halves: the
+# walnut cap has a light pentagon on all ten faces and the light cap a
+# walnut one. That is the yin-yang reading made literal -- each half holds a
+# piece of the other everywhere, not only where the two strips meet -- and
+# it is why this is a pocket per face rather than the two end marks an
+# earlier note planned.
+#
+# The inlay is a scaled copy of its own face, so a triangular solid gets
+# triangles and the d10's kites get kites, and it is one part repeated: ten
+# identical inserts ride beside the strip like the lids do.
+#
+# The pocket goes into the OUTER skin, which is the face that prints against
+# the bed, so its ceiling bridges. That is fine and invisible -- the insert
+# covers it -- but the depth is not free: the magnet sockets float their
+# floor SOCKET_SKIN over that same skin, and what is left between the two is
+# SOCKET_SKIN - INLAY_DEPTH. At 0.6mm deep only 0.2mm would be left and the
+# socket's shadow reaches 3.75mm in from the seam edge, which on the
+# icosahedron caps a centred inlay at 0.43 of the face. At 0.4mm the socket
+# stops reaching the pocket at all and the limit goes back to 0.81, set by
+# the seam and the hinge alone. So the depth is chosen by the socket.
+INLAY_SCALE = 0.40          # of the face, which is about where Nadal's sits
+INLAY_DEPTH = 0.4           # mm into the outer skin; see above
+INLAY_GAP = 0.15            # mm clearance round the insert
+INLAY_ROUND = 0.4           # mm radius on the pocket's corners
+INLAY_WALL = 0.6            # mm of material the pocket must leave all round
+INLAY_FLOOR = 0.3           # mm it must leave over itself, to a socket. Less
+                            # than SOCKET_SKIN - INLAY_DEPTH on purpose: the
+                            # two are decoupled by the depth above, and a
+                            # guard that stopped exactly ON the socket's floor
+                            # would be checking a coplanar touch, which is the
+                            # one measurement a mesh boolean cannot be trusted
+                            # to call.
+INLAY_PROUD = 0.4           # mm the cutter runs below the outer surface
+
+
+def inlay_outline(pts2d, shrink=0.0):
+    """The inlay's outline: the face scaled about its own centre, with the
+    corners taken off. A sharp corner is not something a nozzle can cut
+    anyway, so rounding it is honesty about what prints, and it means the
+    insert's corners cannot jam on the pocket's."""
+    c = np.mean(np.array(pts2d, float), axis=0)
+    small = [tuple(c + INLAY_SCALE * (np.array(p, float) - c)) for p in pts2d]
+    poly = m3d.CrossSection([ccw(small)])
+    r = INLAY_ROUND
+    poly = poly.offset(-r, m3d.JoinType.Miter, 2.0, 0) \
+               .offset(r, m3d.JoinType.Round, 2.0, 96)
+    return poly.offset(-shrink, m3d.JoinType.Round, 2.0, 96) if shrink else poly
+
+
+def inlay_pocket(pts2d):
+    """The cut. It starts below the outer surface rather than flush with it:
+    a cutter whose end face lands exactly on the surface it cuts is the
+    coplanar case that has webbed a mouth over once already."""
+    return m3d.Manifold.extrude(inlay_outline(pts2d), INLAY_DEPTH + INLAY_PROUD) \
+                       .translate([0, 0, -INLAY_PROUD])
+
+
+def inlay_insert(pts2d):
+    """The contrasting part that fills it, flush with the outer surface.
+
+    As thick as the pocket is deep, not thinner: two layers at a common
+    layer height, and FDM parts come out at or under nominal in z, so the
+    error that is left runs the safe way -- an insert a hair below flush,
+    which reads as the line around an inlay, rather than one standing proud.
+    The 0.15mm all round is the glue path."""
+    return m3d.Manifold.extrude(inlay_outline(pts2d, INLAY_GAP), INLAY_DEPTH)
+
+
+def inlay_guard(pts2d):
+    """The pocket grown by the material it has to leave: sideways by
+    INLAY_WALL, and upward by INLAY_FLOOR, which is the direction a socket
+    lies in. Asserting this still sits inside the un-pocketed strip checks
+    the seam, the hinge trench and the socket floor in one go, instead of
+    trusting three separate sums.
+
+    It starts at the outer surface, not below it like the cutter does: the
+    pocket is MEANT to break that surface, so the cutter's proud tail is
+    outside the body by design and would swamp the measurement."""
+    return m3d.Manifold.extrude(
+        inlay_outline(pts2d).offset(INLAY_WALL, m3d.JoinType.Round, 2.0, 96),
+        INLAY_DEPTH + INLAY_FLOOR)
+
+
+def inlay_clearance(face_2d, path):
+    """How much room the inlay leaves to the nearest edge of its face, over
+    and above what that edge needs. Measured per edge, so it means the same
+    on the d10's kites as on a triangle. Sockets are not in here -- they are
+    above the pocket, not beside it, and inlay_guard covers them."""
+    fold_edges = compute_fold_edges(SOLID.faces, path)
+    worst = math.inf
+    for fi in path:
+        pts = dict(face_2d[fi])
+        face = SOLID.faces[fi]
+        corners = np.array(
+            inlay_outline([q for _, q in face_2d[fi]]).to_polygons()[0], float)
+        centre = np.mean([q for _, q in face_2d[fi]], axis=0)
+        for k in range(len(face)):
+            a, b = face[k], face[(k + 1) % len(face)]
+            e = edge_key(a, b)
+            pa, pb = np.array(pts[a], float), np.array(pts[b], float)
+            n = np.array([-(pb - pa)[1], (pb - pa)[0]])
+            n = n / np.linalg.norm(n)
+            if n @ (centre - pa) < 0:
+                n = -n
+            need = (wall_margin(FACE_THICKNESS, miter_of(e)) if e in fold_edges
+                    else seam_margin(INLAY_DEPTH, miter_of(e)))
+            worst = min(worst, min(n @ (c - pa) for c in corners) - need)
+    return worst
+
+
 def seam_cut(pa, pb, miter, up_to=None):
     """The wedge to take off the base along one seam edge.
 
@@ -654,10 +768,13 @@ def build_strip(path, edge_len=TARGET_EDGE):
                 pa, pb = pb, pa
             seams.append((e, pa, pb, fi))
 
-    lids = []
+    # Everything that prints flat beside the strip, in the same colour or
+    # the contrasting one. Tagged rather than kept in two lists so the count
+    # in the finished file cannot disagree with what was built.
+    loose = []
     for e, pa, pb, fi in seams:
         if e in SOCKET_KEYS:
-            lids.append(socket_parts(miter_of(e))[2])
+            loose.append(("lid", socket_parts(miter_of(e))[2]))
 
     # A cutter is clipped to the face that owns its edge. It has to overrun
     # the edge's ends -- two cuts meeting at a corner would otherwise leave a
@@ -697,7 +814,22 @@ def build_strip(path, edge_len=TARGET_EDGE):
         holes += [at_edge(cut, pa, pb), at_edge(rebate, pa, pb)]
     if holes:
         solid -= m3d.Manifold.batch_boolean(holes, m3d.OpType.Add)
-    return solid, face_2d, lids
+
+    # and last, the inlay: one pocket per face, cut after the seams and the
+    # sockets so that what it is checked against is the finished body
+    pockets = []
+    for fi in path:
+        pts2d = [q for _, q in face_2d[fi]]
+        guard = inlay_guard(pts2d)
+        left = (guard - solid).volume()
+        assert left < 1e-6, (
+            f"face {fi}: the inlay pocket comes within {INLAY_WALL}mm of a "
+            f"surface ({left:.3f}mm3 of its guard is outside the body) -- it "
+            f"is too big, too deep, or sitting on top of a socket")
+        pockets.append(inlay_pocket(pts2d))
+        loose.append(("inlay", inlay_insert(pts2d)))
+    solid -= m3d.Manifold.batch_boolean(pockets, m3d.OpType.Add)
+    return solid, face_2d, loose
 
 
 def export_stl(manifold_obj, path_out):
@@ -821,7 +953,7 @@ if __name__ == "__main__":
 
     solids = []
     for i, path in enumerate(paths):
-        solid, face_2d, lids = build_strip(path)
+        solid, face_2d, loose = build_strip(path)
         n = len(solid.decompose())
         assert n == 1, f"cap {i} is split into {n} disconnected shells"
         bb = solid.bounding_box()
@@ -831,7 +963,7 @@ if __name__ == "__main__":
             f"at TARGET_EDGE={TARGET_EDGE}mm")
         print(f"cap{i}: volume {solid.volume():8.1f}mm3   footprint {w:.1f} x {h:.1f} x "
               f"{bb[5] - bb[2]:.1f}mm")
-        solids.append((solid, face_2d, path, lids))
+        solids.append((solid, face_2d, path, loose))
 
     # The design is only worth one file if the two caps really are the same
     # part. Comparing vertex lists does not answer that -- the two meshes are
@@ -877,7 +1009,7 @@ if __name__ == "__main__":
         f"the two caps differ by {skin:.2e}mm of surface -- too much to be "
         f"arithmetic, so they are genuinely not the same part")
 
-    solid, face_2d, path, lids = solids[0]
+    solid, face_2d, path, loose = solids[0]
     if SOCKET_KEYS:
         print(f"{len(SOCKET_KEYS)} magnet sockets at cycle edges {SOCKET_AT}; the rim "
               f"is {WALL_HEIGHT:.2f}mm, raised from {MIN_WALL_HEIGHT:.2f} to take them, "
@@ -886,6 +1018,10 @@ if __name__ == "__main__":
         print(f"no magnet sockets: one would come within {SOCKET_GAP:.2f}mm of a fold's "
               f"miter plane at this size. A socket is absolute millimetres and the "
               f"face is not, so a larger size has room.")
+    print(f"inlay on every face at {INLAY_SCALE:.2f} of it, {INLAY_DEPTH:.1f}mm deep: "
+          f"clears the nearest edge of its face by {inlay_clearance(face_2d, path):.2f}mm, "
+          f"with at least {INLAY_WALL:.1f}mm of body beside the pocket and "
+          f"{INLAY_FLOOR:.1f}mm over it")
 
     i = min(len(path) // 2, len(path) - 2)     # a 2-face strip has only one fold
     va, vb = shared_verts(SOLID.faces, path[i], path[i + 1])
@@ -912,13 +1048,30 @@ if __name__ == "__main__":
 
     name = SOLID.name.split()[-1].lower()
     out = f"hardware/tests/flat_strip_{name}_{TARGET_SIZE:g}mm.stl"
-    # the lids ride along beside the strip: they are the same print, and one
-    # strip needs exactly as many as it has sockets
+    # The loose parts ride along beside the strip -- one lid per socket, one
+    # inlay per face -- packed into rows no wider than the strip itself, so
+    # the file's footprint stays the strip's and the bed check still means
+    # something. The inlays print in the OTHER colour: that is the whole
+    # point of them, so they are a second print, not a second part.
     bb = solid.bounding_box()
     shipped = solid
-    for j, lid in enumerate(lids):
-        b = lid.bounding_box()
-        shipped += lid.translate([bb[0] - b[0] + j * (b[3] - b[0] + 3.0),
-                                  bb[4] - b[1] + 4.0, -b[2]])
+    x, y, row = bb[0], bb[4] + 4.0, 0.0
+    for kind, part in loose:
+        b = part.bounding_box()
+        w, h = b[3] - b[0], b[4] - b[1]
+        if x > bb[0] and x + w > bb[3]:
+            x, y, row = bb[0], y + row + 3.0, 0.0
+        shipped += part.translate([x - b[0], y - b[1], -b[2]])
+        x, row = x + w + 3.0, max(row, h)
+
+    sb = shipped.bounding_box()
+    sw, sh = sb[3] - sb[0], sb[4] - sb[1]
+    assert max(sw, sh) <= BED_MM, (
+        f"the strip and its {len(loose)} loose parts come to {sw:.0f}x{sh:.0f}mm "
+        f"and will not fit a {BED_MM:.0f}mm bed at TARGET_EDGE={TARGET_EDGE}mm")
+
     export_stl(shipped, out)
-    print(f"\nwrote {out}  (print TWO of these: strip + {len(lids)} lids)")
+    n_lid = sum(1 for k, _ in loose if k == "lid")
+    n_inlay = sum(1 for k, _ in loose if k == "inlay")
+    print(f"\nwrote {out}  ({sw:.0f} x {sh:.0f}mm; print TWO of these: strip + "
+          f"{n_lid} lids, and the {n_inlay} inlays in the other colour)")
