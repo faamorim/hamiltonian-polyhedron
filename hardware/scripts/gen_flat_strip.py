@@ -312,6 +312,48 @@ def hinge_trench(pa, pb, miter):
     extra end wall of one hinge gap by FACE_THICKNESS. That was 0.96mm2 at the
     time, which is exactly the surface-area difference it produced, and it was
     enough to make two congruent caps fail the one-part check.
+
+    WHERE TWO FOLD LINES MEET, considered and deliberately not done. Every fold
+    line ends on the net outline, so where two faces of the strip share a
+    corner two trenches cross and a patch of the thinned base has to bend about
+    both fold axes at once. Curvature adds as a tensor, so two folds crossing
+    at 60 degrees give 1.5x and 0.5x the single-fold curvature, and three folds
+    at 60 degrees -- which is what a reflex corner of the net carries -- sum to
+    an isotropic 1.5x, a little dome. A flat sheet cannot become doubly curved
+    by bending alone, so the patch also has to stretch: two crossing bands
+    carry Gaussian curvature whose integral is (fold_i x fold_j x sin(crossing
+    angle)), INDEPENDENT of the hinge width. Widening the hinge does not touch
+    that term; only not letting the folds cross does.
+
+    The fix would be to cut the patch away -- a notch about 0.9mm across on the
+    icosahedron, 1.4mm on the octahedron, removing 0.35mm2 at a 180 degree
+    outline point and 0.56mm2 at a reflex one, 2.5mm2 of the cap's 172mm2 of
+    thinned base. Not to stop the trench short of the corner: that leaves a
+    full-thickness bridge across the fold, whose strain index is t x angle / 2w
+    = 55% against the mid-span's 27%, next to a re-entrant step into thicker
+    material -- a crack starter in a brittle filament.
+
+    Three reasons it is not here. The patch straddles the outline, since its
+    apex IS a boundary point, so the cut cannot be an interior pocket: it opens
+    onto a seam edge and leaves a scallop in the seam at every vertex, and the
+    seam reading as one unbroken line round the solid is a thing this project
+    wants. The bending index is the same on every solid by construction (the
+    width law holds curvature at 0.912/mm), but the stretching term grows as
+    the square of the fold angle, so it is the octahedron at roughly 4.7% hoop
+    strain against PLA's ~5% that is marginal, and the icosahedron at ~1.7%
+    that is comfortable -- and the icosahedron is what gets printed. And the
+    printed icosahedron hinge works, which says the real strain is below the
+    index anyway, since the bend spreads out of the trench into the faces.
+
+    So: if a cap ever cracks at a corner rather than mid-span, this is the fix,
+    behind one constant, off by default, with the notch derived from the net's
+    own corners so both caps get it identically. Until then the corner stays.
+
+    It would not lose a vertex, incidentally. At a vertex of degree n the cycle
+    splits the fan into k and n-k faces, a fan needs three faces to have two
+    fold lines, and both sides can only reach three if n >= 6 -- our largest
+    vertex degree is 5. So exactly one cap crosses at each vertex, only that
+    cap would be cut, and the other cap's material still reaches the point.
     """
     ax, ay = pa
     bx, by = pb
