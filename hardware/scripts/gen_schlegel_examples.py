@@ -141,64 +141,40 @@ def draw(ax, pts, edges, route, colour, closed, visited_all, trapped=False):
                                 linewidth=2.0 if on else 2.4,
                                 linestyle="-" if on else (0, (1.6, 1.4)),
                                 zorder=3))
-    def label(v, text, ink):
-        """Put the caption in whichever direction around its own vertex is
-        emptiest.
-
-        Pushing it radially outward from the middle of the drawing is what
-        this did first, and it fails twice over: a vertex near the centre
-        has no reliable "outward", and on an inner ring the push lands the
-        word on top of the NEXT vertex, so the label names the wrong dot.
-        Eight candidate directions, scored by how far the word ends up from
-        every other vertex, costs nothing and cannot do that."""
+    # Nothing is written inside the drawing, and no line points at anything.
+    # The version before this one labelled the ends and the stranded vertex
+    # and ran leaders back to them, and next to the cycle -- which carries no
+    # marks at all -- it just looked noisy. The panel's own title says what
+    # the picture is; the picture only has to show it. So the ends of an open
+    # walk are ringed, a dead end is crossed, an unreached vertex is left
+    # hollow, and that is the whole vocabulary.
+    def ring(v):
         x, y = pts[v]
-        here = np.array([x, y], float)
-        others = np.array([q for i, q in enumerate(pts) if i != v])
-        best, lx, ly = -1.0, x, y
-        for k in range(16):
-            t = k * math.pi / 8
-            cand = here + np.array([math.cos(t), math.sin(t)]) * 0.24
-            clear = float(np.linalg.norm(others - cand, axis=1).min())
-            if clear > best:
-                best, lx, ly = clear, cand[0], cand[1]
-        # far enough out to be in clear space, with a leader back to the
-        # vertex it names -- on an inner ring nowhere within a dot's reach
-        # is unambiguous, so the line does the pointing instead of proximity
-        ax.annotate(text, xy=(x, y), xytext=(lx, ly),
-                    ha="center", va="center", fontsize=12,
-                    color=ink, weight="bold", zorder=5,
-                    arrowprops=dict(arrowstyle="-", color=ink, lw=1.4,
-                                    shrinkA=2, shrinkB=7),
-                    bbox=dict(boxstyle="round,pad=0.22", facecolor="white",
-                              edgecolor="none", alpha=0.95))
+        ax.add_patch(plt.Circle((x, y), 0.052, facecolor="none",
+                                edgecolor=colour, linewidth=2.4, zorder=4))
+
+    def cross(v):
+        x, y = pts[v]
+        d = 0.030
+        for sgn in (1, -1):
+            ax.plot([x - d, x + d], [y - sgn * d, y + sgn * d],
+                    color="white", lw=2.8, zorder=4, solid_capstyle="round")
 
     if trapped:
-        # both ends, because both are dead -- that is what makes it trapped
         for v in (route[0], route[-1]):
-            ex, ey = pts[v]
-            d = 0.030
-            for sgn in (1, -1):
-                ax.plot([ex - d, ex + d], [ey - sgn * d, ey + sgn * d],
-                        color="white", lw=2.6, zorder=4, solid_capstyle="round")
-            label(v, "stuck", colour)
-        for v in sorted(set(range(len(pts))) - seen):
-            x, y = pts[v]
-            ax.add_patch(plt.Circle((x, y), 0.052, facecolor="none",
-                                    edgecolor=INK, linewidth=2.2, zorder=4))
-            label(v, "unreachable", INK)
+            ring(v)
+            cross(v)
     elif not closed:
-        x, y = pts[route[0]]
-        ax.add_patch(plt.Circle((x, y), 0.052, facecolor="none",
-                                edgecolor=colour, linewidth=2.2, zorder=4))
-        label(route[0], "start", colour)
-        label(route[-1], "end", colour)
+        ring(route[0])
+        ring(route[-1])
+
     ax.set_aspect("equal")
     ax.axis("off")
     # Room for the labels and for a dashed marker sitting on the outline.
     # From the drawing's own box, not symmetric about the origin: a Schlegel
     # diagram is a triangle here, so symmetric limits hang it off centre and
     # waste half the panel.
-    pad = 0.28
+    pad = 0.10
     ax.set_xlim(pts[:, 0].min() - pad, pts[:, 0].max() + pad)
     ax.set_ylim(pts[:, 1].min() - pad, pts[:, 1].max() + pad)
 
