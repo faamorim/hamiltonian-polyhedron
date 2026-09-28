@@ -59,7 +59,7 @@ import numpy as np
 from matplotlib.backends.backend_pdf import PdfPages
 
 from polyhedra import SOLIDS, face_edges
-from pdf_page import PAGE_W_MM, PAGE_H_MM, MM_PER_INCH, MARGIN_MM, draw_scale_bar
+from pdf_page import PAGE_W_MM, PAGE_H_MM, MM_PER_INCH, MARGIN_MM
 
 HEADER_MM = 26     # taller than the strip template's: this one has a subtitle
 
@@ -320,7 +320,6 @@ if __name__ == "__main__":
         ax.add_patch(plt.Circle((x, y), VERTEX_R_MM, **VERTEX_STYLE))
     ax.text(PAGE_W_MM / 2, PAGE_H_MM - 15, f"Hamiltonian Polyhedron - {solid.name}",
             ha="center", fontsize=11, weight="bold")
-    draw_scale_bar(ax)
     ax.text(PAGE_W_MM / 2, PAGE_H_MM - 21, "Schlegel Diagram",
             ha="center", fontsize=9, style="italic", color="0.3")
 

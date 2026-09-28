@@ -20,9 +20,12 @@ anything the polyhedron needs, so there is nothing to fold there. Dashed
 lines are the internal edges between faces (fold here, mountain-fold so the
 strip curls toward you the way the printed 3D version will).
 
-Must be printed at 100% / "Actual Size" -- NOT "Fit to page". The edge
-length is auto-scaled to the largest size that fits both nets on one
-landscape sheet (with a safety margin) -- this is a standalone
+Print it however you like -- "fit to page" is fine. Scaling the sheet
+scales every edge and every tab with it, so the result is the same
+polyhedron, slightly smaller. (The STL is the opposite and says so: its
+hinge is absolute millimetres.) The edge length quoted is what you get at
+100%, auto-scaled to the largest size that fits both nets on one landscape
+sheet (with a safety margin) -- this is a standalone
 paper/cardboard test of the fold geometry, not meant to match the 3D
 prototype's scale (bigger is easier to fold and see clearly by hand).
 
@@ -56,7 +59,7 @@ from shapely.ops import unary_union
 from polyhedra import SOLIDS, unfold, compute_fold_edges, edge_key, net_alignment_deg
 
 from pdf_page import (PAGE_W_MM, PAGE_H_MM, MM_PER_INCH, MARGIN_MM, HEADER_MM,
-                      draw_scale_bar)
+                      )
 
 CUT_GAP_MM = 3.0  # minimum real clearance wanted between the two cut outlines
 
@@ -426,7 +429,6 @@ if __name__ == "__main__":
     ax.text(PAGE_W_MM / 2, PAGE_H_MM - 15,
             f"Hamiltonian Polyhedron - {solid.name}",
             ha="center", fontsize=11, weight="bold")
-    draw_scale_bar(ax)
 
     out = f"hardware/tests/flat_strip_template_{name}.pdf"
     with PdfPages(out) as pdf:
