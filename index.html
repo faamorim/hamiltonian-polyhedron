@@ -1195,6 +1195,25 @@
   });
   controls.autoRotateSpeed = 1.6;
 
+  // Fading a face is not just its opacity: it has to stop WRITING DEPTH as
+  // well, or it goes black rather than clear.
+  //
+  // A half-transparent face still fills the depth buffer, so everything
+  // behind it fails the test and is never drawn -- and what the reader sees
+  // is the face's colour blended against the page background, which is very
+  // nearly black. The face we look through appeared to darken into a hole
+  // instead of opening one, and the inside of the solid, the whole reason
+  // for opening it, stayed hidden until the face had gone entirely.
+  //
+  // Depth writing stays on while a face is fully opaque, because that is
+  // what draws a solid correctly. It goes off the moment the face is
+  // see-through, which is exactly when it has no business hiding anything.
+  function setFade(m, o){
+    m.opacity = o;
+    m.visible = o > 0.01;
+    m.depthWrite = o > 0.999;
+  }
+
   // One place decides what the flattening looks like at a given moment, the
   // same way applySeam does for the seam.
   function applyMorph(){
@@ -1221,24 +1240,15 @@
     // through -- the one that became the outer boundary -- has gone.
     var viewFade = 1 - beat(morphT, 0.06, 0.30);
     var fade = 1 - beat(morphT, 0.66, 0.99);
-    currentMorph.faceMats.forEach(function(m){
-      m.opacity = fade;
-      m.visible = fade > 0.01;
-    });
-    currentMorph.viewMats.forEach(function(m){
-      m.opacity = Math.min(fade, viewFade);
-      m.visible = m.opacity > 0.01;
-    });
+    currentMorph.faceMats.forEach(function(m){ setFade(m, fade); });
+    currentMorph.viewMats.forEach(function(m){ setFade(m, Math.min(fade, viewFade)); });
     // The inlays go with the turn, not with the surface. They are proud of
     // the faces rather than part of them, so a fade that tracks the face
     // under each one leaves them floating a moment either way, and they are
     // a fact about the PRINTED object -- there is nothing for them to mean
     // in a flat graph. Out early, while the solid is still rotating, and the
     // reader never has to watch them try to follow the explosion.
-    currentMorph.inlays.forEach(function(inl){
-      inl.mesh.material.opacity = viewFade;
-      inl.mesh.material.visible = viewFade > 0.01;
-    });
+    currentMorph.inlays.forEach(function(inl){ setFade(inl.mesh.material, viewFade); });
     currentMorph.wire.material.opacity = 0.25 + 0.75 * beat(morphT, 0.45, 0.88);
     currentMorph.wire.visible = true;
 
