@@ -51,6 +51,12 @@
     border-left:1px solid var(--panel-border);
   }
   .field{ margin-bottom:18px; }
+  /* A control that has nothing to act on is greyed where it stands rather
+     than removed: pulling a row out of the sidebar reflows everything below
+     it, so the panel jumps and the reader has to find their place again. */
+  .field.off{ opacity:0.4; }
+  .field.off label, .field.off .value{ color:var(--text-dim); }
+  .field.off input{ cursor:not-allowed; }
   .field label{
     display:block; font-size:0.8rem; color:var(--text-dim);
     margin-bottom:6px; text-transform:uppercase; letter-spacing:0.03em;
@@ -163,6 +169,10 @@
       <div class="field checkbox-row">
         <input type="checkbox" id="traceCycle">
         <label for="traceCycle" style="margin:0; text-transform:none; letter-spacing:normal;">Trace the cycle &mdash; watch it split the solid</label>
+      </div>
+      <div class="field checkbox-row">
+        <input type="checkbox" id="flatten">
+        <label for="flatten" style="margin:0; text-transform:none; letter-spacing:normal;">Flatten to the Schlegel diagram</label>
       </div>
       <div class="field checkbox-row">
         <input type="checkbox" id="followSeam">
@@ -304,6 +314,57 @@
 
   function edgeKey(a, b){ return a < b ? a + "-" + b : b + "-" + a; }
 
+  // Tutte's embedding, computed here from the page's OWN vertex numbering.
+  //
+  // It used to be generated in Python and shipped alongside, so that the
+  // page would flatten into exactly the diagram the worksheet prints. That
+  // was unsound: the generator and the page number their vertices
+  // differently -- different order, different faces, even a different
+  // Hamiltonian cycle -- so a layout indexed by one was being read with the
+  // other's numbers. On the icosahedron it happened to look plausible; the
+  // dodecahedron came out as a star of crossing edges. Two sources of truth
+  // for what vertex 7 means is the bug, not the symptom.
+  //
+  // Tutte 1963: pin one face's vertices to a convex polygon, put every other
+  // vertex at the average of its neighbours, and for a 3-connected planar
+  // graph -- which every convex polyhedron's is, by Steinitz -- the result
+  // is crossing-free with every face convex. No geometry, only which vertex
+  // touches which, so it cannot disagree with the data it is built from.
+  function tutteLayout(data){
+    var n = data.vertices.length;
+    var vf = data.faces[0];
+    var adj = [];
+    for (var i = 0; i < n; i++) adj.push([]);
+    data.faces.forEach(function(f){
+      for (var k = 0; k < f.length; k++){
+        var a = f[k], b = f[(k + 1) % f.length];
+        if (adj[a].indexOf(b) < 0) adj[a].push(b);
+        if (adj[b].indexOf(a) < 0) adj[b].push(a);
+      }
+    });
+    var pts = [], pinned = {};
+    for (var i2 = 0; i2 < n; i2++) pts.push([0, 0]);
+    vf.forEach(function(vi, k){
+      var ang = Math.PI / 2 + 2 * Math.PI * k / vf.length;
+      pts[vi] = [Math.cos(ang), Math.sin(ang)];
+      pinned[vi] = true;
+    });
+    // Gauss-Seidel until it stops moving: 20 vertices, converges in no time
+    for (var it = 0; it < 4000; it++){
+      var shift = 0;
+      for (var v = 0; v < n; v++){
+        if (pinned[v]) continue;
+        var sx = 0, sy = 0;
+        adj[v].forEach(function(w){ sx += pts[w][0]; sy += pts[w][1]; });
+        sx /= adj[v].length; sy /= adj[v].length;
+        shift = Math.max(shift, Math.abs(sx - pts[v][0]), Math.abs(sy - pts[v][1]));
+        pts[v] = [sx, sy];
+      }
+      if (shift < 1e-9) break;
+    }
+    return { viewFace: 0, pts: pts };
+  }
+
   // A Hamiltonian cycle removes itself from the face-adjacency (dual)
   // graph as a cut, so flood-filling that graph without crossing cycle
   // edges yields exactly the two caps the cycle separates.
@@ -425,6 +486,13 @@
   var currentGroups = null;
   var currentDirections = null;
   var currentSeam = null;
+  var currentMorph = null; // the flattening: where every vertex starts and ends
+  var morphT = 0;          // 0 = the solid, 1 = the Schlegel diagram
+  var morphTarget = 0;     // what it is heading for
+  var MORPH_SECONDS = 3.2;
+  var morphHome = null;    // the camera to give back when it unflattens
+  var _d = new THREE.Vector3();
+  var _a = new THREE.Vector3();
   var seamWidth = 1.0;     // the slider
   var tracing = false;
   var traceT = 0;          // how far the walk has got, in cycle edges
@@ -438,8 +506,34 @@
     if (currentGroups){
       currentGroups.forEach(function(g){ scene.remove(g); });
     }
+    if (currentMorph && currentMorph.wire) scene.remove(currentMorph.wire);
     currentGroups = null;
     currentDirections = null;
+    currentMorph = null;
+    morphT = morphTarget = 0;
+  }
+
+  // Flattening is a view the reader is IN, not a property of the solid they
+  // happen to be looking at. Switching solid or palette rebuilds the scene
+  // from nothing, and leaving the tickbox ticked over an unflattened solid
+  // said the opposite of what the page was showing. So the view is carried
+  // over: the new solid arrives already flat, at its own diagram, in one
+  // step rather than replaying three seconds of animation on every palette
+  // toggle. A solid with no diagram to go to gives the view up and says so
+  // by unticking.
+  function restoreFlatView(){
+    if (!flatten.checked) return;
+    if (!currentMorph || !currentMorph.canFlatten){
+      flatten.checked = false;
+      morphT = morphTarget = 0;
+      applyMorph();               // hands the camera back, if it has one
+      applySeam();
+      return;
+    }
+    captureHome();
+    morphT = morphTarget = 1;
+    applyMorph();
+    applySeam();                  // nothing is animating, so nobody else will
   }
 
   function buildShape(key){
@@ -465,6 +559,12 @@
     }
 
     var posArrays = [[], []];
+    // The vertex each triangle corner came FROM, one per corner, parallel to
+    // posArrays. Without it the face geometry is a one-time snapshot of the
+    // solid with no way back to the vertices it was built from -- which is
+    // exactly what it was, so the surface sat frozen in the shape of the
+    // solid while the graph flew out of it.
+    var idxArrays = [[], []];
     var faceCounts = [0, 0];
     var centroidSum = [new THREE.Vector3(), new THREE.Vector3()];
     var faceSpans = [[], []];
@@ -488,6 +588,7 @@
         tri.forEach(function(vi){
           var p = positions[vi];
           posArrays[g].push(p.x, p.y, p.z);
+          idxArrays[g].push(vi);
         });
       });
       faceSpans[g].push({ face: fi, start: start,
@@ -508,11 +609,28 @@
       if (partition.adj[fi].length === 1) endFaces[fi] = true;
     });
 
+    // The diagram this solid flattens into. It is laid in the plane of the
+    // face it is seen through, at that face's own size, so the outer face
+    // lands exactly where the real one already is and every other vertex
+    // flies inside it -- which is what a Schlegel diagram is, rather than a
+    // second picture that happens to resemble one.
+    //
+    // It is Tutte's embedding of THIS page's graph, not the worksheet's
+    // drawing: see tutteLayout for why shipping the printed one here was
+    // unsound. Same graph and same cycle, a different drawing of it.
+    var lay = tutteLayout(data);
+    // The face the diagram is seen through. It is built with a material of
+    // its own, because it has to be able to go while the rest of the
+    // surface stays: see applyMorph.
+    var viewFace = lay ? lay.viewFace : -1;
+
     var groups = [];
     var seamEdges = [];
     var seamDots = [];
     var faceBuffers = [];
     var inlays = [];
+    var faceMats = [];
+    var viewMats = [];
     for (var g = 0; g < 2; g++){
       var container = new THREE.Group();
 
@@ -529,8 +647,33 @@
         vertexColors: true, side: THREE.DoubleSide,
         flatShading: true, roughness: 0.55, metalness: 0.05
       });
-      container.add(new THREE.Mesh(geo, mat));
-      faceBuffers.push({ attr: geo.getAttribute("color"), spans: faceSpans[g], cap: g });
+      mat.transparent = true;
+      faceMats.push(mat);
+
+      // One mesh per cap, but the face we look through gets its own slice of
+      // it. A geometry group over that face's triangles, pointing at a second
+      // material, is all it takes -- the positions and the per-vertex colours
+      // stay one array, so the trace, the flattening and the paint are
+      // untouched.
+      var mats = mat;
+      var viewSpan = null;
+      faceSpans[g].forEach(function(span){
+        if (span.face === viewFace) viewSpan = span;
+      });
+      if (viewSpan){
+        var viewMat = mat.clone();
+        viewMats.push(viewMat);
+        mats = [mat, viewMat];
+        var total = posArrays[g].length / 3;
+        if (viewSpan.start > 0) geo.addGroup(0, viewSpan.start, 0);
+        geo.addGroup(viewSpan.start, viewSpan.count, 1);
+        var after = total - (viewSpan.start + viewSpan.count);
+        if (after > 0) geo.addGroup(viewSpan.start + viewSpan.count, after, 0);
+      }
+      container.add(new THREE.Mesh(geo, mats));
+      faceBuffers.push({ attr: geo.getAttribute("color"), spans: faceSpans[g], cap: g,
+                         geo: geo, pos: geo.getAttribute("position"),
+                         idx: idxArrays[g] });
 
       // The seam is real geometry, one tube per cycle edge, not a line.
       // THREE.LineBasicMaterial's linewidth is ignored by every WebGL core
@@ -549,22 +692,21 @@
       var dotMat = new THREE.MeshBasicMaterial({ color: 0xffd9a0 });
       var shrink = (g === 1) ? 0.94 : 1.0;
 
+      // A seam edge stores the two vertices it JOINS, not the two points
+      // they were at when it was built. Everything about the tube -- where
+      // it sits, which way it points, how long it is -- is worked out from
+      // the live positions each frame, which is what lets the whole solid
+      // be somewhere else entirely by the next one.
       data.cycle.forEach(function(vi, k){
-        var a = positions[vi];
-        var b = positions[data.cycle[(k + 1) % data.cycle.length]];
-        var dir = b.clone().sub(a);
-        var len = dir.length();
-        dir.normalize();
         var tube = new THREE.Mesh(cylGeo, seamMat);
-        tube.quaternion.setFromUnitVectors(UP, dir);
         container.add(tube);
-        seamEdges.push({ mesh: tube, a: a.clone(), dir: dir, len: len,
+        seamEdges.push({ mesh: tube, va: vi,
+                         vb: data.cycle[(k + 1) % data.cycle.length],
                          step: k, shrink: shrink });
 
         var dot = new THREE.Mesh(sphereGeo, dotMat);
-        dot.position.copy(a);
         container.add(dot);
-        seamDots.push({ mesh: dot, step: k, shrink: shrink });
+        seamDots.push({ mesh: dot, v: vi, step: k, shrink: shrink });
       });
 
       // The yin-yang inlay: on each of the strip's two end faces, a scaled
@@ -595,7 +737,8 @@
             side: THREE.DoubleSide, flatShading: true, roughness: 0.55
           }));
           container.add(im);
-          inlays.push({ mesh: im, paintAt: span.paintAt });
+          im.material.transparent = true;
+          inlays.push({ mesh: im, paintAt: span.paintAt, face: span.face });
         });
       }
 
@@ -603,15 +746,105 @@
       groups.push(container);
     }
 
+    var flat = null, viewNormal = null, faceSpan = 1;
+    if (lay){
+      var vf = data.faces[lay.viewFace];
+      var c0 = new THREE.Vector3();
+      vf.forEach(function(vi){ c0.add(positions[vi]); });
+      c0.divideScalar(vf.length);
+      var nrm = new THREE.Vector3().subVectors(positions[vf[1]], positions[vf[0]])
+        .cross(new THREE.Vector3().subVectors(positions[vf[2]], positions[vf[0]]))
+        .normalize();
+      if (nrm.dot(c0) < 0) nrm.negate();
+      var uax = new THREE.Vector3().subVectors(positions[vf[0]], c0).normalize();
+      var vaxRaw = new THREE.Vector3().crossVectors(nrm, uax).normalize();
+      var vax = vaxRaw.clone();
+
+      // Fit the layout onto the real face rather than assuming it is already
+      // pointing the right way. The layout carries its own rotation (upright()
+      // turns it so a chosen vertex is up) and its own handedness, and
+      // dropping it into an arbitrary in-plane basis puts the outer face's
+      // vertices in the wrong slots -- which on the dodecahedron produced a
+      // diagram whose edges crossed, and on every solid made the vertices
+      // spin on their way out instead of travelling straight.
+      //
+      // So solve for the similarity that carries the layout's copy of this
+      // face onto the real one: as complex numbers, z -> c*z or c*conj(z),
+      // whichever fits better. Least squares over all of the face's vertices,
+      // so no single one decides it.
+      var lc = [0, 0];
+      vf.forEach(function(vi){ lc[0] += lay.pts[vi][0]; lc[1] += lay.pts[vi][1]; });
+      lc[0] /= vf.length; lc[1] /= vf.length;
+      var ar = 0, ai = 0, br = 0, bi = 0, ll = 0;
+      vf.forEach(function(vi){
+        var lx = lay.pts[vi][0] - lc[0], ly = lay.pts[vi][1] - lc[1];
+        var w = positions[vi].clone().sub(c0);
+        var qx = w.dot(uax), qy = w.dot(vaxRaw);
+        ar += lx * qx + ly * qy;  ai += lx * qy - ly * qx;   // conj(l) * q
+        br += lx * qx - ly * qy;  bi += lx * qy + ly * qx;   // l * q
+        ll += lx * lx + ly * ly;
+      });
+      var refl = Math.hypot(br, bi) > Math.hypot(ar, ai);
+      var cr = (refl ? br : ar) / (ll || 1), ci = (refl ? bi : ai) / (ll || 1);
+      faceSpan = 0;
+      vf.forEach(function(vi){
+        faceSpan = Math.max(faceSpan, positions[vi].distanceTo(c0));
+      });
+      flat = lay.pts.map(function(q){
+        var lx = q[0] - lc[0], ly = (refl ? -1 : 1) * (q[1] - lc[1]);
+        return c0.clone().addScaledVector(uax, cr * lx - ci * ly)
+                         .addScaledVector(vaxRaw, ci * lx + cr * ly);
+      });
+      // "up" has to be the fitted layout's up, not the basis vector it was
+      // fitted from, or the camera rolls to the wrong angle and the diagram
+      // arrives tilted.
+      var uy = refl ? [ci, -cr] : [-ci, cr];
+      vax = new THREE.Vector3().addScaledVector(uax, uy[0])
+                               .addScaledVector(vaxRaw, uy[1]).normalize();
+      viewNormal = nrm;
+    }
+
+    // Every edge of the solid, as a line. In the solid it is a faint
+    // scaffold under the faces; in the diagram it is the whole drawing.
+    var pairs = [];
+    var seenEdge = {};
+    data.faces.forEach(function(f){
+      for (var k = 0; k < f.length; k++){
+        var a2 = f[k], b2 = f[(k + 1) % f.length];
+        var key2 = Math.min(a2, b2) + "-" + Math.max(a2, b2);
+        if (!seenEdge[key2]){ seenEdge[key2] = true; pairs.push([a2, b2]); }
+      }
+    });
+    var wireGeo = new THREE.BufferGeometry();
+    wireGeo.setAttribute("position", new THREE.Float32BufferAttribute(
+      new Float32Array(pairs.length * 6), 3));
+    var wire = new THREE.LineSegments(wireGeo, new THREE.LineBasicMaterial({
+      color: 0x9aa3b4, transparent: true, opacity: 0 }));
+    scene.add(wire);
+
+    currentMorph = {
+      base: positions.map(function(p){ return p.clone(); }),
+      flat: flat || positions.map(function(p){ return p.clone(); }),
+      normal: viewNormal, span: faceSpan, wire: wire, pairs: pairs,
+      centre: (lay ? c0.clone() : new THREE.Vector3()),
+      up: (lay ? vax.clone() : new THREE.Vector3(0, 0, 1)),
+      faceMats: faceMats, viewMats: viewMats, viewFace: viewFace,
+      inlays: inlays, canFlatten: !!flat
+    };
+
     currentGroups = groups;
     currentDirections = directions;
     currentSeam = { edges: seamEdges, dots: seamDots, steps: data.cycle.length,
                     path: data.cycle.map(function(vi){ return positions[vi].clone(); }) };
     currentFaces = { buffers: faceBuffers, inlays: inlays };
     traceT = 0;
+    lastShapeT = -1;             // new geometry: nothing has been written yet
     applySeparation(currentSeparation);
     applySeam();
     applyFaces();
+    restoreFlatView();
+    applyMorph();
+    if (flatten) flatten.disabled = !currentMorph.canFlatten;
 
     document.getElementById("stats").innerHTML =
       "<b>" + data.vertices.length + "</b> vertices &middot; " +
@@ -725,19 +958,88 @@
   // dots and the walk cannot end up disagreeing about how far round it is.
   function applySeam(){
     if (!currentSeam) return;
-    var r = SEAM_R * seamWidth;
-    var dotScale = Math.max(1, (r * 1.45) / DOT_R);
+    applyFaceShape();
+    // Thinner as it flattens: the diagram is one face wide, so the camera
+    // ends up close, and a tube sized for the whole solid reads as a girder.
+    var shrinkSeam = 1 - 0.55 * beat(morphT, 0.35, 1.0);
+    var r = SEAM_R * seamWidth * shrinkSeam;
+    var dotScale = Math.max(1, (r * 1.45) / DOT_R) * shrinkSeam;
+    var P = livePositions();
     currentSeam.edges.forEach(function(e){
       var grown = tracing ? Math.min(1, Math.max(0, traceT - e.step)) : 1;
       e.mesh.visible = (r > 0 && grown > 0);
       if (!e.mesh.visible) return;
-      var len = e.len * grown;
+      var a = P[e.va], b = P[e.vb];
+      _d.subVectors(b, a);
+      var len = _d.length() * grown;
+      if (len < 1e-6) { e.mesh.visible = false; return; }
+      _d.normalize();
+      e.mesh.quaternion.setFromUnitVectors(UP, _d);
       e.mesh.scale.set(r * e.shrink, len, r * e.shrink);
-      e.mesh.position.copy(e.a).addScaledVector(e.dir, len / 2);
+      e.mesh.position.copy(a).addScaledVector(_d, len / 2);
     });
     currentSeam.dots.forEach(function(d){
       d.mesh.visible = (r > 0 && (!tracing || traceT >= d.step));
+      d.mesh.position.copy(P[d.v]);
       d.mesh.scale.setScalar(dotScale * d.shrink);
+    });
+    if (currentMorph && currentMorph.wire){
+      var arr = currentMorph.wire.geometry.getAttribute("position");
+      currentMorph.pairs.forEach(function(pr, i){
+        arr.setXYZ(i * 2, P[pr[0]].x, P[pr[0]].y, P[pr[0]].z);
+        arr.setXYZ(i * 2 + 1, P[pr[1]].x, P[pr[1]].y, P[pr[1]].z);
+      });
+      arr.needsUpdate = true;
+    }
+  }
+
+  // The SURFACE follows the vertices too, not just the seam drawn on it.
+  // It used to be built once and left alone, so the faces were a snapshot of
+  // the solid that stayed put and faded while the graph exploded out through
+  // them -- colour peeling off the shape it belonged to. Every triangle
+  // corner now goes back to the vertex it came from, so the faces stretch
+  // with the cycle and the fade takes a surface that is still the reader's.
+  //
+  // It costs a normal recompute per frame of the morph, which is sixty-odd
+  // triangles: cheaper than the seam already redrawn beside it. The guard is
+  // there because applySeam is also the trace's per-frame call, and a solid
+  // that is not moving has nothing to rewrite.
+  var lastShapeT = -1;
+  function applyFaceShape(){
+    if (!currentFaces || !currentMorph) return;
+    if (morphT === lastShapeT) return;
+    lastShapeT = morphT;
+    var P = livePositions();
+    currentFaces.buffers.forEach(function(buf){
+      var a = buf.pos.array;
+      for (var i = 0; i < buf.idx.length; i++){
+        var q = P[buf.idx[i]];
+        a[i * 3] = q.x; a[i * 3 + 1] = q.y; a[i * 3 + 2] = q.z;
+      }
+      buf.pos.needsUpdate = true;
+      buf.geo.computeVertexNormals();
+    });
+    // The inlays are rigid triangles sitting proud of a face that is now
+    // stretching under them, so there is nothing sensible for them to follow.
+    // They leave with the rotation instead -- see applyMorph.
+  }
+
+  // Smoothstep over a slice of the morph, so each beat has its own window
+  // and they can overlap -- the faces start fading before the camera has
+  // finished swinging, and the vertices leave before the faces are gone.
+  function beat(t, a, b){
+    var x = Math.min(1, Math.max(0, (t - a) / (b - a)));
+    return x * x * (3 - 2 * x);
+  }
+
+  // Where every vertex is RIGHT NOW: its place on the solid, its place in
+  // the diagram, or somewhere on the way between them.
+  function livePositions(){
+    if (!currentMorph) return [];
+    if (morphT <= 0) return currentMorph.base;
+    var e = beat(morphT, 0.45, 1.0);
+    return currentMorph.base.map(function(p, i){
+      return p.clone().lerp(currentMorph.flat[i], e);
     });
   }
 
@@ -851,11 +1153,136 @@
     }
   });
 
+  // Flattening is a view, not a setting: the controls that stop meaning
+  // anything once the solid is a flat drawing are hidden rather than left
+  // there doing nothing. There is no camera to auto-rotate and no pair of
+  // caps to separate.
+  var flatten = document.getElementById("flatten");
+  flatten.addEventListener("change", function(){
+    if (!currentMorph || !currentMorph.canFlatten){ flatten.checked = false; return; }
+    morphTarget = flatten.checked ? 1 : 0;
+    if (flatten.checked){
+      sepSlider.value = 0; sepValue.textContent = "0.00"; applySeparation(0);
+      autoRotate.checked = false; controls.autoRotate = false;
+      followSeam.checked = false; following = false;
+      captureHome();
+    }
+  });
+
+  // Where the camera was before any of this. Captured ONCE, on the way out,
+  // and never overwritten on the way back: re-reading the camera when
+  // unticking made "where we came from" the flattened view itself, so it
+  // returned to the diagram's zoom and never gave the original back.
+  //
+  // It lives out here rather than on currentMorph because it has to outlive
+  // the shape. Switching solid or palette while flat rebuilds the scene, and
+  // a home that died with the old morph left the camera parked on the old
+  // diagram -- aimed at a face centre that no longer existed, rolled to that
+  // diagram's up -- which is what broke the orbit after a switch.
+  function captureHome(){
+    if (morphHome) return;
+    morphHome = {
+      dir: camera.position.clone().sub(controls.target).normalize(),
+      dist: camera.position.distanceTo(controls.target),
+      target: controls.target.clone(),
+      up: camera.up.clone()
+    };
+  }
+
   var autoRotate = document.getElementById("autoRotate");
   autoRotate.addEventListener("change", function(){
     controls.autoRotate = autoRotate.checked;
   });
   controls.autoRotateSpeed = 1.6;
+
+  // One place decides what the flattening looks like at a given moment, the
+  // same way applySeam does for the seam.
+  function applyMorph(){
+    if (!currentMorph) return;
+    // Two clocks for the surface, not one.
+    //
+    // The face we look THROUGH goes first, and goes completely: that hole is
+    // the whole difference between a solid and a Schlegel diagram, and it
+    // opens while the camera is still turning face-on, so the window arrives
+    // with the view.
+    //
+    // The rest of the surface stays up almost the whole way. A bare
+    // wireframe of a convex solid seen face-on is a tangle -- every far edge
+    // crosses a near one and nothing says which is in front -- so fading it
+    // early leaves a stretch where the reader has lost the polyhedron and
+    // not yet been given the diagram. With the surface still there the near
+    // faces occlude the far ones, the explosion reads as depth, and the last
+    // moments show the cycle cutting the finished DIAGRAM into its two caps,
+    // which is the same claim the solid was making. Only then does it go.
+    //
+    // It can stay that late because the faces of a planar embedding tile
+    // their region without overlapping: there is nothing at the end for a
+    // filled face to fight for the same plane, once the face being looked
+    // through -- the one that became the outer boundary -- has gone.
+    var viewFade = 1 - beat(morphT, 0.06, 0.30);
+    var fade = 1 - beat(morphT, 0.66, 0.99);
+    currentMorph.faceMats.forEach(function(m){
+      m.opacity = fade;
+      m.visible = fade > 0.01;
+    });
+    currentMorph.viewMats.forEach(function(m){
+      m.opacity = Math.min(fade, viewFade);
+      m.visible = m.opacity > 0.01;
+    });
+    // The inlays go with the turn, not with the surface. They are proud of
+    // the faces rather than part of them, so a fade that tracks the face
+    // under each one leaves them floating a moment either way, and they are
+    // a fact about the PRINTED object -- there is nothing for them to mean
+    // in a flat graph. Out early, while the solid is still rotating, and the
+    // reader never has to watch them try to follow the explosion.
+    currentMorph.inlays.forEach(function(inl){
+      inl.mesh.material.opacity = viewFade;
+      inl.mesh.material.visible = viewFade > 0.01;
+    });
+    currentMorph.wire.material.opacity = 0.25 + 0.75 * beat(morphT, 0.45, 0.88);
+    currentMorph.wire.visible = true;
+
+    if (morphT <= 0 && morphHome){
+      // Land exactly where we started. Anything short of this leaves the
+      // orbit somewhere the controls did not put it, and the next drag
+      // tumbles from a camera whose up vector is still half way to the
+      // diagram's.
+      var h = morphHome;
+      controls.target.copy(h.target);
+      camera.up.copy(h.up);
+      camera.position.copy(h.target).addScaledVector(h.dir, h.dist);
+      camera.lookAt(h.target);
+      morphHome = null;
+    }
+    if (morphT > 0 && morphHome && currentMorph.normal){
+      var e = beat(morphT, 0.0, 0.55);
+      // The diagram is not centred where the solid is: it lies in the plane
+      // of the face it is seen through, a face's inradius out from the
+      // middle. Aiming at the origin the whole way leaves it half off the
+      // screen, so the look-at point travels with it.
+      controls.target.copy(morphHome.target).lerp(currentMorph.centre, e);
+      // Roll it upright too. Face-on is not enough: the diagram is a
+      // similarity of the printed one, so without this the page shows it
+      // turned at some arbitrary angle and it stops looking like the sheet
+      // in the reader's hand.
+      camera.up.copy(morphHome.up).lerp(currentMorph.up, e).normalize();
+      _a.copy(morphHome.dir).lerp(currentMorph.normal, e).normalize();
+      var framed = currentMorph.span / Math.tan(THREE.MathUtils.degToRad(22.5)) * 1.12;
+      var dist = morphHome.dist * (1 - e) + framed * e;
+      camera.position.copy(controls.target).addScaledVector(_a, dist);
+    }
+    controls.enableRotate = morphT < 0.02;
+    // Greyed, not removed. There is no camera to auto-rotate and no pair of
+    // caps to pull apart once the solid is a flat drawing, but taking the
+    // rows out of the sidebar reflowed every row below them, so the panel
+    // jumped and everything the reader had their eye on moved.
+    var dead = morphT > 0.5;
+    [sepSlider, autoRotate, followSeam].forEach(function(el){
+      el.disabled = dead;
+      var row = el.closest(".field");
+      if (row) row.classList.toggle("off", dead);
+    });
+  }
 
   function resize(){
     var w = wrap.clientWidth, h = wrap.clientHeight;
@@ -877,6 +1304,13 @@
       if (traceT > currentSeam.steps + TRACE_HOLD) traceT = 0;
       applySeam();
       applyFaces();
+    }
+    if (morphT !== morphTarget){
+      var step = dt / MORPH_SECONDS;
+      morphT += Math.min(step, Math.abs(morphTarget - morphT)) *
+                (morphTarget > morphT ? 1 : -1);
+      applyMorph();
+      applySeam();
     }
     if (following && currentSeam){
       camT = tracing ? traceT : camT + dt * TRACE_SPEED;
