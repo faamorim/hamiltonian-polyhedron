@@ -191,7 +191,6 @@
 </div>
 
 <script src="downloads.js"></script>
-<script src="schlegel.js"></script>
 <script src="vendor/three/three.min.js"></script>
 <script src="vendor/three/OrbitControls.js"></script>
 <script>
@@ -308,6 +307,57 @@
   };
 
   function edgeKey(a, b){ return a < b ? a + "-" + b : b + "-" + a; }
+
+  // Tutte's embedding, computed here from the page's OWN vertex numbering.
+  //
+  // It used to be generated in Python and shipped alongside, so that the
+  // page would flatten into exactly the diagram the worksheet prints. That
+  // was unsound: the generator and the page number their vertices
+  // differently -- different order, different faces, even a different
+  // Hamiltonian cycle -- so a layout indexed by one was being read with the
+  // other's numbers. On the icosahedron it happened to look plausible; the
+  // dodecahedron came out as a star of crossing edges. Two sources of truth
+  // for what vertex 7 means is the bug, not the symptom.
+  //
+  // Tutte 1963: pin one face's vertices to a convex polygon, put every other
+  // vertex at the average of its neighbours, and for a 3-connected planar
+  // graph -- which every convex polyhedron's is, by Steinitz -- the result
+  // is crossing-free with every face convex. No geometry, only which vertex
+  // touches which, so it cannot disagree with the data it is built from.
+  function tutteLayout(data){
+    var n = data.vertices.length;
+    var vf = data.faces[0];
+    var adj = [];
+    for (var i = 0; i < n; i++) adj.push([]);
+    data.faces.forEach(function(f){
+      for (var k = 0; k < f.length; k++){
+        var a = f[k], b = f[(k + 1) % f.length];
+        if (adj[a].indexOf(b) < 0) adj[a].push(b);
+        if (adj[b].indexOf(a) < 0) adj[b].push(a);
+      }
+    });
+    var pts = [], pinned = {};
+    for (var i2 = 0; i2 < n; i2++) pts.push([0, 0]);
+    vf.forEach(function(vi, k){
+      var ang = Math.PI / 2 + 2 * Math.PI * k / vf.length;
+      pts[vi] = [Math.cos(ang), Math.sin(ang)];
+      pinned[vi] = true;
+    });
+    // Gauss-Seidel until it stops moving: 20 vertices, converges in no time
+    for (var it = 0; it < 4000; it++){
+      var shift = 0;
+      for (var v = 0; v < n; v++){
+        if (pinned[v]) continue;
+        var sx = 0, sy = 0;
+        adj[v].forEach(function(w){ sx += pts[w][0]; sy += pts[w][1]; });
+        sx /= adj[v].length; sy /= adj[v].length;
+        shift = Math.max(shift, Math.abs(sx - pts[v][0]), Math.abs(sy - pts[v][1]));
+        pts[v] = [sx, sy];
+      }
+      if (shift < 1e-9) break;
+    }
+    return { viewFace: 0, pts: pts };
+  }
 
   // A Hamiltonian cycle removes itself from the face-adjacency (dual)
   // graph as a cut, so flood-filling that graph without crossing cycle
@@ -624,7 +674,7 @@
     // is seen through, at that face's own size, so the outer triangle lands
     // exactly where the real face already is and every other vertex flies
     // into it. Nothing is invented here; the page only places it.
-    var lay = (window.SCHLEGEL || {})[key];
+    var lay = tutteLayout(data);
     var flat = null, viewNormal = null, faceSpan = 1;
     if (lay){
       var vf = data.faces[lay.viewFace];
@@ -636,19 +686,50 @@
         .normalize();
       if (nrm.dot(c0) < 0) nrm.negate();
       var uax = new THREE.Vector3().subVectors(positions[vf[0]], c0).normalize();
-      var vax = new THREE.Vector3().crossVectors(nrm, uax).normalize();
-      // scale the unit-width layout so its outer face matches the real one
-      var lw = 0, rw = 0;
+      var vaxRaw = new THREE.Vector3().crossVectors(nrm, uax).normalize();
+      var vax = vaxRaw.clone();
+
+      // Fit the layout onto the real face rather than assuming it is already
+      // pointing the right way. The layout carries its own rotation (upright()
+      // turns it so a chosen vertex is up) and its own handedness, and
+      // dropping it into an arbitrary in-plane basis puts the outer face's
+      // vertices in the wrong slots -- which on the dodecahedron produced a
+      // diagram whose edges crossed, and on every solid made the vertices
+      // spin on their way out instead of travelling straight.
+      //
+      // So solve for the similarity that carries the layout's copy of this
+      // face onto the real one: as complex numbers, z -> c*z or c*conj(z),
+      // whichever fits better. Least squares over all of the face's vertices,
+      // so no single one decides it.
+      var lc = [0, 0];
+      vf.forEach(function(vi){ lc[0] += lay.pts[vi][0]; lc[1] += lay.pts[vi][1]; });
+      lc[0] /= vf.length; lc[1] /= vf.length;
+      var ar = 0, ai = 0, br = 0, bi = 0, ll = 0;
       vf.forEach(function(vi){
-        lw = Math.max(lw, Math.hypot(lay.pts[vi][0], lay.pts[vi][1]));
-        rw = Math.max(rw, positions[vi].distanceTo(c0));
+        var lx = lay.pts[vi][0] - lc[0], ly = lay.pts[vi][1] - lc[1];
+        var w = positions[vi].clone().sub(c0);
+        var qx = w.dot(uax), qy = w.dot(vaxRaw);
+        ar += lx * qx + ly * qy;  ai += lx * qy - ly * qx;   // conj(l) * q
+        br += lx * qx - ly * qy;  bi += lx * qy + ly * qx;   // l * q
+        ll += lx * lx + ly * ly;
       });
-      var sc = rw / (lw || 1);
-      faceSpan = rw;
+      var refl = Math.hypot(br, bi) > Math.hypot(ar, ai);
+      var cr = (refl ? br : ar) / (ll || 1), ci = (refl ? bi : ai) / (ll || 1);
+      faceSpan = 0;
+      vf.forEach(function(vi){
+        faceSpan = Math.max(faceSpan, positions[vi].distanceTo(c0));
+      });
       flat = lay.pts.map(function(q){
-        return c0.clone().addScaledVector(uax, q[0] * sc)
-                         .addScaledVector(vax, q[1] * sc);
+        var lx = q[0] - lc[0], ly = (refl ? -1 : 1) * (q[1] - lc[1]);
+        return c0.clone().addScaledVector(uax, cr * lx - ci * ly)
+                         .addScaledVector(vaxRaw, ci * lx + cr * ly);
       });
+      // "up" has to be the fitted layout's up, not the basis vector it was
+      // fitted from, or the camera rolls to the wrong angle and the diagram
+      // arrives tilted.
+      var uy = refl ? [ci, -cr] : [-ci, cr];
+      vax = new THREE.Vector3().addScaledVector(uax, uy[0])
+                               .addScaledVector(vaxRaw, uy[1]).normalize();
       viewNormal = nrm;
     }
 
@@ -979,11 +1060,19 @@
       sepSlider.value = 0; sepValue.textContent = "0.00"; applySeparation(0);
       autoRotate.checked = false; controls.autoRotate = false;
       followSeam.checked = false; following = false;
+      // Captured ONCE, on the way out, and never overwritten on the way
+      // back. Re-reading the camera when unticking meant "where we came
+      // from" became the flattened view itself, so it returned to the
+      // diagram's zoom and never gave the original back.
+      if (!currentMorph.home){
+        currentMorph.home = {
+          dir: camera.position.clone().sub(controls.target).normalize(),
+          dist: camera.position.distanceTo(controls.target),
+          target: controls.target.clone(),
+          up: camera.up.clone()
+        };
+      }
     }
-    currentMorph.camFrom = {
-      dir: camera.position.clone().sub(controls.target).normalize(),
-      dist: camera.position.distanceTo(controls.target)
-    };
   });
 
   var autoRotate = document.getElementById("autoRotate");
@@ -1004,21 +1093,33 @@
     currentMorph.wire.material.opacity = 0.25 + 0.75 * beat(morphT, 0.30, 0.70);
     currentMorph.wire.visible = true;
 
-    if (morphT > 0 && currentMorph.camFrom && currentMorph.normal){
+    if (morphT <= 0 && currentMorph.home){
+      // Land exactly where we started. Anything short of this leaves the
+      // orbit somewhere the controls did not put it, and the next drag
+      // tumbles from a camera whose up vector is still half way to the
+      // diagram's.
+      var h = currentMorph.home;
+      controls.target.copy(h.target);
+      camera.up.copy(h.up);
+      camera.position.copy(h.target).addScaledVector(h.dir, h.dist);
+      camera.lookAt(h.target);
+      currentMorph.home = null;
+    }
+    if (morphT > 0 && currentMorph.home && currentMorph.normal){
       var e = beat(morphT, 0.0, 0.55);
       // The diagram is not centred where the solid is: it lies in the plane
       // of the face it is seen through, a face's inradius out from the
       // middle. Aiming at the origin the whole way leaves it half off the
       // screen, so the look-at point travels with it.
-      controls.target.set(0, 0, 0).lerp(currentMorph.centre, e);
+      controls.target.copy(currentMorph.home.target).lerp(currentMorph.centre, e);
       // Roll it upright too. Face-on is not enough: the diagram is a
       // similarity of the printed one, so without this the page shows it
       // turned at some arbitrary angle and it stops looking like the sheet
       // in the reader's hand.
-      camera.up.set(0, 0, 1).lerp(currentMorph.up, e).normalize();
-      _a.copy(currentMorph.camFrom.dir).lerp(currentMorph.normal, e).normalize();
+      camera.up.copy(currentMorph.home.up).lerp(currentMorph.up, e).normalize();
+      _a.copy(currentMorph.home.dir).lerp(currentMorph.normal, e).normalize();
       var framed = currentMorph.span / Math.tan(THREE.MathUtils.degToRad(22.5)) * 1.12;
-      var dist = currentMorph.camFrom.dist * (1 - e) + framed * e;
+      var dist = currentMorph.home.dist * (1 - e) + framed * e;
       camera.position.copy(controls.target).addScaledVector(_a, dist);
     }
     controls.enableRotate = morphT < 0.02;
