@@ -815,6 +815,29 @@ def build_strip(path, edge_len=TARGET_EDGE):
     # overlap instead of meeting exactly on the fold line between them.
     # Sharing that wall makes them coplanar, and the union then returns nine
     # zero-volume slivers that read as a strip in nine pieces.
+    #
+    # WHAT THIS LEAVES, and why it is left. A prism wall is vertical, so
+    # where the clip stops a cutter the surface it leaves is vertical too --
+    # and at a REFLEX corner of the net, where two seam edges meet and each
+    # cutter stops at its own face, the base keeps a small vertical wall
+    # between two mitered faces. Measured on the icosahedron: 0.215mm2 over
+    # seven triangles, spanning z 0 to 1.14mm (the base skin, not the rim),
+    # 0.06 to 0.81mm from the corner. Because it is vertical it stays at the
+    # 0.08mm inset it has at z=0 all the way up, where the miter beside it
+    # has reached 0.515mm -- so it stands as much as 0.435mm proud of its
+    # neighbours, which is why it reads as a spike in a render.
+    #
+    # It does not stop the caps closing. check_fold masks a 2mm sphere at
+    # every vertex and this sits 0.8mm from one, so that gate never judges
+    # it; asked directly, the interference inside the mask is 0.36mm thick.
+    # But fold the caps with the hinge bands cut out first, which removes
+    # the one thing that check is known to get wrong -- it turns each split
+    # hinge rigidly where the real hinge bends -- and the face bodies
+    # overlap by 0.000000mm3 in zero pieces. The wall is not in the way; the
+    # 0.36mm is the rigid hinge, not the corner.
+    #
+    # Mitering the clip itself would remove it, at the cost of reopening the
+    # case the clip was added to fix. Not worth it for a facet this size.
     prisms = {}
     for fi in {f for _, _, _, f in seams}:
         poly = m3d.CrossSection([ccw([p for _, p in face_2d[fi]])])
