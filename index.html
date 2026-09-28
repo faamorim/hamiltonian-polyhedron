@@ -165,6 +165,10 @@
         <label for="traceCycle" style="margin:0; text-transform:none; letter-spacing:normal;">Trace the cycle &mdash; watch it split the solid</label>
       </div>
       <div class="field checkbox-row">
+        <input type="checkbox" id="flatten">
+        <label for="flatten" style="margin:0; text-transform:none; letter-spacing:normal;">Flatten to the Schlegel diagram</label>
+      </div>
+      <div class="field checkbox-row">
         <input type="checkbox" id="followSeam">
         <label for="followSeam" style="margin:0; text-transform:none; letter-spacing:normal;">Camera follows the seam</label>
       </div>
@@ -187,6 +191,7 @@
 </div>
 
 <script src="downloads.js"></script>
+<script src="schlegel.js"></script>
 <script src="vendor/three/three.min.js"></script>
 <script src="vendor/three/OrbitControls.js"></script>
 <script>
@@ -425,6 +430,12 @@
   var currentGroups = null;
   var currentDirections = null;
   var currentSeam = null;
+  var currentMorph = null; // the flattening: where every vertex starts and ends
+  var morphT = 0;          // 0 = the solid, 1 = the Schlegel diagram
+  var morphTarget = 0;     // what it is heading for
+  var MORPH_SECONDS = 2.6;
+  var _d = new THREE.Vector3();
+  var _a = new THREE.Vector3();
   var seamWidth = 1.0;     // the slider
   var tracing = false;
   var traceT = 0;          // how far the walk has got, in cycle edges
@@ -438,8 +449,11 @@
     if (currentGroups){
       currentGroups.forEach(function(g){ scene.remove(g); });
     }
+    if (currentMorph && currentMorph.wire) scene.remove(currentMorph.wire);
     currentGroups = null;
     currentDirections = null;
+    currentMorph = null;
+    morphT = morphTarget = 0;
   }
 
   function buildShape(key){
@@ -513,6 +527,7 @@
     var seamDots = [];
     var faceBuffers = [];
     var inlays = [];
+    var faceMats = [];
     for (var g = 0; g < 2; g++){
       var container = new THREE.Group();
 
@@ -529,6 +544,8 @@
         vertexColors: true, side: THREE.DoubleSide,
         flatShading: true, roughness: 0.55, metalness: 0.05
       });
+      mat.transparent = true;
+      faceMats.push(mat);
       container.add(new THREE.Mesh(geo, mat));
       faceBuffers.push({ attr: geo.getAttribute("color"), spans: faceSpans[g], cap: g });
 
@@ -549,22 +566,21 @@
       var dotMat = new THREE.MeshBasicMaterial({ color: 0xffd9a0 });
       var shrink = (g === 1) ? 0.94 : 1.0;
 
+      // A seam edge stores the two vertices it JOINS, not the two points
+      // they were at when it was built. Everything about the tube -- where
+      // it sits, which way it points, how long it is -- is worked out from
+      // the live positions each frame, which is what lets the whole solid
+      // be somewhere else entirely by the next one.
       data.cycle.forEach(function(vi, k){
-        var a = positions[vi];
-        var b = positions[data.cycle[(k + 1) % data.cycle.length]];
-        var dir = b.clone().sub(a);
-        var len = dir.length();
-        dir.normalize();
         var tube = new THREE.Mesh(cylGeo, seamMat);
-        tube.quaternion.setFromUnitVectors(UP, dir);
         container.add(tube);
-        seamEdges.push({ mesh: tube, a: a.clone(), dir: dir, len: len,
+        seamEdges.push({ mesh: tube, va: vi,
+                         vb: data.cycle[(k + 1) % data.cycle.length],
                          step: k, shrink: shrink });
 
         var dot = new THREE.Mesh(sphereGeo, dotMat);
-        dot.position.copy(a);
         container.add(dot);
-        seamDots.push({ mesh: dot, step: k, shrink: shrink });
+        seamDots.push({ mesh: dot, v: vi, step: k, shrink: shrink });
       });
 
       // The yin-yang inlay: on each of the strip's two end faces, a scaled
@@ -603,6 +619,66 @@
       groups.push(container);
     }
 
+    // The diagram this solid flattens into, from schlegel.js -- the same
+    // layout the worksheet prints. It is laid in the plane of the face it
+    // is seen through, at that face's own size, so the outer triangle lands
+    // exactly where the real face already is and every other vertex flies
+    // into it. Nothing is invented here; the page only places it.
+    var lay = (window.SCHLEGEL || {})[key];
+    var flat = null, viewNormal = null, faceSpan = 1;
+    if (lay){
+      var vf = data.faces[lay.viewFace];
+      var c0 = new THREE.Vector3();
+      vf.forEach(function(vi){ c0.add(positions[vi]); });
+      c0.divideScalar(vf.length);
+      var nrm = new THREE.Vector3().subVectors(positions[vf[1]], positions[vf[0]])
+        .cross(new THREE.Vector3().subVectors(positions[vf[2]], positions[vf[0]]))
+        .normalize();
+      if (nrm.dot(c0) < 0) nrm.negate();
+      var uax = new THREE.Vector3().subVectors(positions[vf[0]], c0).normalize();
+      var vax = new THREE.Vector3().crossVectors(nrm, uax).normalize();
+      // scale the unit-width layout so its outer face matches the real one
+      var lw = 0, rw = 0;
+      vf.forEach(function(vi){
+        lw = Math.max(lw, Math.hypot(lay.pts[vi][0], lay.pts[vi][1]));
+        rw = Math.max(rw, positions[vi].distanceTo(c0));
+      });
+      var sc = rw / (lw || 1);
+      faceSpan = rw;
+      flat = lay.pts.map(function(q){
+        return c0.clone().addScaledVector(uax, q[0] * sc)
+                         .addScaledVector(vax, q[1] * sc);
+      });
+      viewNormal = nrm;
+    }
+
+    // Every edge of the solid, as a line. In the solid it is a faint
+    // scaffold under the faces; in the diagram it is the whole drawing.
+    var pairs = [];
+    var seenEdge = {};
+    data.faces.forEach(function(f){
+      for (var k = 0; k < f.length; k++){
+        var a2 = f[k], b2 = f[(k + 1) % f.length];
+        var key2 = Math.min(a2, b2) + "-" + Math.max(a2, b2);
+        if (!seenEdge[key2]){ seenEdge[key2] = true; pairs.push([a2, b2]); }
+      }
+    });
+    var wireGeo = new THREE.BufferGeometry();
+    wireGeo.setAttribute("position", new THREE.Float32BufferAttribute(
+      new Float32Array(pairs.length * 6), 3));
+    var wire = new THREE.LineSegments(wireGeo, new THREE.LineBasicMaterial({
+      color: 0x9aa3b4, transparent: true, opacity: 0 }));
+    scene.add(wire);
+
+    currentMorph = {
+      base: positions.map(function(p){ return p.clone(); }),
+      flat: flat || positions.map(function(p){ return p.clone(); }),
+      normal: viewNormal, span: faceSpan, wire: wire, pairs: pairs,
+      centre: (lay ? c0.clone() : new THREE.Vector3()),
+      up: (lay ? vax.clone() : new THREE.Vector3(0, 0, 1)),
+      faceMats: faceMats, canFlatten: !!flat
+    };
+
     currentGroups = groups;
     currentDirections = directions;
     currentSeam = { edges: seamEdges, dots: seamDots, steps: data.cycle.length,
@@ -612,6 +688,8 @@
     applySeparation(currentSeparation);
     applySeam();
     applyFaces();
+    applyMorph();
+    if (flatten) flatten.disabled = !currentMorph.canFlatten;
 
     document.getElementById("stats").innerHTML =
       "<b>" + data.vertices.length + "</b> vertices &middot; " +
@@ -725,19 +803,56 @@
   // dots and the walk cannot end up disagreeing about how far round it is.
   function applySeam(){
     if (!currentSeam) return;
-    var r = SEAM_R * seamWidth;
-    var dotScale = Math.max(1, (r * 1.45) / DOT_R);
+    // Thinner as it flattens: the diagram is one face wide, so the camera
+    // ends up close, and a tube sized for the whole solid reads as a girder.
+    var shrinkSeam = 1 - 0.55 * beat(morphT, 0.35, 1.0);
+    var r = SEAM_R * seamWidth * shrinkSeam;
+    var dotScale = Math.max(1, (r * 1.45) / DOT_R) * shrinkSeam;
+    var P = livePositions();
     currentSeam.edges.forEach(function(e){
       var grown = tracing ? Math.min(1, Math.max(0, traceT - e.step)) : 1;
       e.mesh.visible = (r > 0 && grown > 0);
       if (!e.mesh.visible) return;
-      var len = e.len * grown;
+      var a = P[e.va], b = P[e.vb];
+      _d.subVectors(b, a);
+      var len = _d.length() * grown;
+      if (len < 1e-6) { e.mesh.visible = false; return; }
+      _d.normalize();
+      e.mesh.quaternion.setFromUnitVectors(UP, _d);
       e.mesh.scale.set(r * e.shrink, len, r * e.shrink);
-      e.mesh.position.copy(e.a).addScaledVector(e.dir, len / 2);
+      e.mesh.position.copy(a).addScaledVector(_d, len / 2);
     });
     currentSeam.dots.forEach(function(d){
       d.mesh.visible = (r > 0 && (!tracing || traceT >= d.step));
+      d.mesh.position.copy(P[d.v]);
       d.mesh.scale.setScalar(dotScale * d.shrink);
+    });
+    if (currentMorph && currentMorph.wire){
+      var arr = currentMorph.wire.geometry.getAttribute("position");
+      currentMorph.pairs.forEach(function(pr, i){
+        arr.setXYZ(i * 2, P[pr[0]].x, P[pr[0]].y, P[pr[0]].z);
+        arr.setXYZ(i * 2 + 1, P[pr[1]].x, P[pr[1]].y, P[pr[1]].z);
+      });
+      arr.needsUpdate = true;
+    }
+  }
+
+  // Smoothstep over a slice of the morph, so each beat has its own window
+  // and they can overlap -- the faces start fading before the camera has
+  // finished swinging, and the vertices leave before the faces are gone.
+  function beat(t, a, b){
+    var x = Math.min(1, Math.max(0, (t - a) / (b - a)));
+    return x * x * (3 - 2 * x);
+  }
+
+  // Where every vertex is RIGHT NOW: its place on the solid, its place in
+  // the diagram, or somewhere on the way between them.
+  function livePositions(){
+    if (!currentMorph) return [];
+    if (morphT <= 0) return currentMorph.base;
+    var e = beat(morphT, 0.45, 1.0);
+    return currentMorph.base.map(function(p, i){
+      return p.clone().lerp(currentMorph.flat[i], e);
     });
   }
 
@@ -851,11 +966,67 @@
     }
   });
 
+  // Flattening is a view, not a setting: the controls that stop meaning
+  // anything once the solid is a flat drawing are hidden rather than left
+  // there doing nothing. There is no camera to auto-rotate and no pair of
+  // caps to separate.
+  var flatten = document.getElementById("flatten");
+  var flatOnly = [];
+  flatten.addEventListener("change", function(){
+    if (!currentMorph || !currentMorph.canFlatten){ flatten.checked = false; return; }
+    morphTarget = flatten.checked ? 1 : 0;
+    if (flatten.checked){
+      sepSlider.value = 0; sepValue.textContent = "0.00"; applySeparation(0);
+      autoRotate.checked = false; controls.autoRotate = false;
+      followSeam.checked = false; following = false;
+    }
+    currentMorph.camFrom = {
+      dir: camera.position.clone().sub(controls.target).normalize(),
+      dist: camera.position.distanceTo(controls.target)
+    };
+  });
+
   var autoRotate = document.getElementById("autoRotate");
   autoRotate.addEventListener("change", function(){
     controls.autoRotate = autoRotate.checked;
   });
   controls.autoRotateSpeed = 1.6;
+
+  // One place decides what the flattening looks like at a given moment, the
+  // same way applySeam does for the seam.
+  function applyMorph(){
+    if (!currentMorph) return;
+    var fade = 1 - beat(morphT, 0.30, 0.58);       // faces go
+    currentMorph.faceMats.forEach(function(m){
+      m.opacity = fade;
+      m.visible = fade > 0.01;
+    });
+    currentMorph.wire.material.opacity = 0.25 + 0.75 * beat(morphT, 0.30, 0.70);
+    currentMorph.wire.visible = true;
+
+    if (morphT > 0 && currentMorph.camFrom && currentMorph.normal){
+      var e = beat(morphT, 0.0, 0.55);
+      // The diagram is not centred where the solid is: it lies in the plane
+      // of the face it is seen through, a face's inradius out from the
+      // middle. Aiming at the origin the whole way leaves it half off the
+      // screen, so the look-at point travels with it.
+      controls.target.set(0, 0, 0).lerp(currentMorph.centre, e);
+      // Roll it upright too. Face-on is not enough: the diagram is a
+      // similarity of the printed one, so without this the page shows it
+      // turned at some arbitrary angle and it stops looking like the sheet
+      // in the reader's hand.
+      camera.up.set(0, 0, 1).lerp(currentMorph.up, e).normalize();
+      _a.copy(currentMorph.camFrom.dir).lerp(currentMorph.normal, e).normalize();
+      var framed = currentMorph.span / Math.tan(THREE.MathUtils.degToRad(22.5)) * 1.12;
+      var dist = currentMorph.camFrom.dist * (1 - e) + framed * e;
+      camera.position.copy(controls.target).addScaledVector(_a, dist);
+    }
+    controls.enableRotate = morphT < 0.02;
+    [sepSlider, autoRotate, followSeam].forEach(function(el){
+      var row = el.closest(".field");
+      if (row) row.hidden = morphT > 0.5;
+    });
+  }
 
   function resize(){
     var w = wrap.clientWidth, h = wrap.clientHeight;
@@ -877,6 +1048,13 @@
       if (traceT > currentSeam.steps + TRACE_HOLD) traceT = 0;
       applySeam();
       applyFaces();
+    }
+    if (morphT !== morphTarget){
+      var step = dt / MORPH_SECONDS;
+      morphT += Math.min(step, Math.abs(morphTarget - morphT)) *
+                (morphTarget > morphT ? 1 : -1);
+      applyMorph();
+      applySeam();
     }
     if (following && currentSeam){
       camT = tracing ? traceT : camT + dt * TRACE_SPEED;
