@@ -669,11 +669,15 @@
       groups.push(container);
     }
 
-    // The diagram this solid flattens into, from schlegel.js -- the same
-    // layout the worksheet prints. It is laid in the plane of the face it
-    // is seen through, at that face's own size, so the outer triangle lands
-    // exactly where the real face already is and every other vertex flies
-    // into it. Nothing is invented here; the page only places it.
+    // The diagram this solid flattens into. It is laid in the plane of the
+    // face it is seen through, at that face's own size, so the outer face
+    // lands exactly where the real one already is and every other vertex
+    // flies inside it -- which is what a Schlegel diagram is, rather than a
+    // second picture that happens to resemble one.
+    //
+    // It is Tutte's embedding of THIS page's graph, not the worksheet's
+    // drawing: see tutteLayout for why shipping the printed one here was
+    // unsound. Same graph and same cycle, a different drawing of it.
     var lay = tutteLayout(data);
     var flat = null, viewNormal = null, faceSpan = 1;
     if (lay){
