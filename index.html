@@ -51,6 +51,12 @@
     border-left:1px solid var(--panel-border);
   }
   .field{ margin-bottom:18px; }
+  /* A control that has nothing to act on is greyed where it stands rather
+     than removed: pulling a row out of the sidebar reflows everything below
+     it, so the panel jumps and the reader has to find their place again. */
+  .field.off{ opacity:0.4; }
+  .field.off label, .field.off .value{ color:var(--text-dim); }
+  .field.off input{ cursor:not-allowed; }
   .field label{
     display:block; font-size:0.8rem; color:var(--text-dim);
     margin-bottom:6px; text-transform:uppercase; letter-spacing:0.03em;
@@ -484,6 +490,7 @@
   var morphT = 0;          // 0 = the solid, 1 = the Schlegel diagram
   var morphTarget = 0;     // what it is heading for
   var MORPH_SECONDS = 3.2;
+  var morphHome = null;    // the camera to give back when it unflattens
   var _d = new THREE.Vector3();
   var _a = new THREE.Vector3();
   var seamWidth = 1.0;     // the slider
@@ -504,6 +511,29 @@
     currentDirections = null;
     currentMorph = null;
     morphT = morphTarget = 0;
+  }
+
+  // Flattening is a view the reader is IN, not a property of the solid they
+  // happen to be looking at. Switching solid or palette rebuilds the scene
+  // from nothing, and leaving the tickbox ticked over an unflattened solid
+  // said the opposite of what the page was showing. So the view is carried
+  // over: the new solid arrives already flat, at its own diagram, in one
+  // step rather than replaying three seconds of animation on every palette
+  // toggle. A solid with no diagram to go to gives the view up and says so
+  // by unticking.
+  function restoreFlatView(){
+    if (!flatten.checked) return;
+    if (!currentMorph || !currentMorph.canFlatten){
+      flatten.checked = false;
+      morphT = morphTarget = 0;
+      applyMorph();               // hands the camera back, if it has one
+      applySeam();
+      return;
+    }
+    captureHome();
+    morphT = morphTarget = 1;
+    applyMorph();
+    applySeam();                  // nothing is animating, so nobody else will
   }
 
   function buildShape(key){
@@ -802,6 +832,7 @@
     applySeparation(currentSeparation);
     applySeam();
     applyFaces();
+    restoreFlatView();
     applyMorph();
     if (flatten) flatten.disabled = !currentMorph.canFlatten;
 
@@ -1085,7 +1116,6 @@
   // there doing nothing. There is no camera to auto-rotate and no pair of
   // caps to separate.
   var flatten = document.getElementById("flatten");
-  var flatOnly = [];
   flatten.addEventListener("change", function(){
     if (!currentMorph || !currentMorph.canFlatten){ flatten.checked = false; return; }
     morphTarget = flatten.checked ? 1 : 0;
@@ -1093,20 +1123,29 @@
       sepSlider.value = 0; sepValue.textContent = "0.00"; applySeparation(0);
       autoRotate.checked = false; controls.autoRotate = false;
       followSeam.checked = false; following = false;
-      // Captured ONCE, on the way out, and never overwritten on the way
-      // back. Re-reading the camera when unticking meant "where we came
-      // from" became the flattened view itself, so it returned to the
-      // diagram's zoom and never gave the original back.
-      if (!currentMorph.home){
-        currentMorph.home = {
-          dir: camera.position.clone().sub(controls.target).normalize(),
-          dist: camera.position.distanceTo(controls.target),
-          target: controls.target.clone(),
-          up: camera.up.clone()
-        };
-      }
+      captureHome();
     }
   });
+
+  // Where the camera was before any of this. Captured ONCE, on the way out,
+  // and never overwritten on the way back: re-reading the camera when
+  // unticking made "where we came from" the flattened view itself, so it
+  // returned to the diagram's zoom and never gave the original back.
+  //
+  // It lives out here rather than on currentMorph because it has to outlive
+  // the shape. Switching solid or palette while flat rebuilds the scene, and
+  // a home that died with the old morph left the camera parked on the old
+  // diagram -- aimed at a face centre that no longer existed, rolled to that
+  // diagram's up -- which is what broke the orbit after a switch.
+  function captureHome(){
+    if (morphHome) return;
+    morphHome = {
+      dir: camera.position.clone().sub(controls.target).normalize(),
+      dist: camera.position.distanceTo(controls.target),
+      target: controls.target.clone(),
+      up: camera.up.clone()
+    };
+  }
 
   var autoRotate = document.getElementById("autoRotate");
   autoRotate.addEventListener("change", function(){
@@ -1144,48 +1183,58 @@
       m.opacity = Math.min(fade, viewFade);
       m.visible = m.opacity > 0.01;
     });
-    // The inlays are proud of the surface: left alone they hang in the air
-    // after the face under them has gone.
+    // The inlays go with the turn, not with the surface. They are proud of
+    // the faces rather than part of them, so a fade that tracks the face
+    // under each one leaves them floating a moment either way, and they are
+    // a fact about the PRINTED object -- there is nothing for them to mean
+    // in a flat graph. Out early, while the solid is still rotating, and the
+    // reader never has to watch them try to follow the explosion.
     currentMorph.inlays.forEach(function(inl){
-      inl.mesh.material.opacity =
-        (inl.face === currentMorph.viewFace) ? Math.min(fade, viewFade) : fade;
+      inl.mesh.material.opacity = viewFade;
+      inl.mesh.material.visible = viewFade > 0.01;
     });
     currentMorph.wire.material.opacity = 0.25 + 0.75 * beat(morphT, 0.45, 0.88);
     currentMorph.wire.visible = true;
 
-    if (morphT <= 0 && currentMorph.home){
+    if (morphT <= 0 && morphHome){
       // Land exactly where we started. Anything short of this leaves the
       // orbit somewhere the controls did not put it, and the next drag
       // tumbles from a camera whose up vector is still half way to the
       // diagram's.
-      var h = currentMorph.home;
+      var h = morphHome;
       controls.target.copy(h.target);
       camera.up.copy(h.up);
       camera.position.copy(h.target).addScaledVector(h.dir, h.dist);
       camera.lookAt(h.target);
-      currentMorph.home = null;
+      morphHome = null;
     }
-    if (morphT > 0 && currentMorph.home && currentMorph.normal){
+    if (morphT > 0 && morphHome && currentMorph.normal){
       var e = beat(morphT, 0.0, 0.55);
       // The diagram is not centred where the solid is: it lies in the plane
       // of the face it is seen through, a face's inradius out from the
       // middle. Aiming at the origin the whole way leaves it half off the
       // screen, so the look-at point travels with it.
-      controls.target.copy(currentMorph.home.target).lerp(currentMorph.centre, e);
+      controls.target.copy(morphHome.target).lerp(currentMorph.centre, e);
       // Roll it upright too. Face-on is not enough: the diagram is a
       // similarity of the printed one, so without this the page shows it
       // turned at some arbitrary angle and it stops looking like the sheet
       // in the reader's hand.
-      camera.up.copy(currentMorph.home.up).lerp(currentMorph.up, e).normalize();
-      _a.copy(currentMorph.home.dir).lerp(currentMorph.normal, e).normalize();
+      camera.up.copy(morphHome.up).lerp(currentMorph.up, e).normalize();
+      _a.copy(morphHome.dir).lerp(currentMorph.normal, e).normalize();
       var framed = currentMorph.span / Math.tan(THREE.MathUtils.degToRad(22.5)) * 1.12;
-      var dist = currentMorph.home.dist * (1 - e) + framed * e;
+      var dist = morphHome.dist * (1 - e) + framed * e;
       camera.position.copy(controls.target).addScaledVector(_a, dist);
     }
     controls.enableRotate = morphT < 0.02;
+    // Greyed, not removed. There is no camera to auto-rotate and no pair of
+    // caps to pull apart once the solid is a flat drawing, but taking the
+    // rows out of the sidebar reflowed every row below them, so the panel
+    // jumped and everything the reader had their eye on moved.
+    var dead = morphT > 0.5;
     [sepSlider, autoRotate, followSeam].forEach(function(el){
+      el.disabled = dead;
       var row = el.closest(".field");
-      if (row) row.hidden = morphT > 0.5;
+      if (row) row.classList.toggle("off", dead);
     });
   }
 
