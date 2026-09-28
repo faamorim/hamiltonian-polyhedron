@@ -559,6 +559,12 @@
     }
 
     var posArrays = [[], []];
+    // The vertex each triangle corner came FROM, one per corner, parallel to
+    // posArrays. Without it the face geometry is a one-time snapshot of the
+    // solid with no way back to the vertices it was built from -- which is
+    // exactly what it was, so the surface sat frozen in the shape of the
+    // solid while the graph flew out of it.
+    var idxArrays = [[], []];
     var faceCounts = [0, 0];
     var centroidSum = [new THREE.Vector3(), new THREE.Vector3()];
     var faceSpans = [[], []];
@@ -582,6 +588,7 @@
         tri.forEach(function(vi){
           var p = positions[vi];
           posArrays[g].push(p.x, p.y, p.z);
+          idxArrays[g].push(vi);
         });
       });
       faceSpans[g].push({ face: fi, start: start,
@@ -664,7 +671,9 @@
         if (after > 0) geo.addGroup(viewSpan.start + viewSpan.count, after, 0);
       }
       container.add(new THREE.Mesh(geo, mats));
-      faceBuffers.push({ attr: geo.getAttribute("color"), spans: faceSpans[g], cap: g });
+      faceBuffers.push({ attr: geo.getAttribute("color"), spans: faceSpans[g], cap: g,
+                         geo: geo, pos: geo.getAttribute("position"),
+                         idx: idxArrays[g] });
 
       // The seam is real geometry, one tube per cycle edge, not a line.
       // THREE.LineBasicMaterial's linewidth is ignored by every WebGL core
@@ -829,6 +838,7 @@
                     path: data.cycle.map(function(vi){ return positions[vi].clone(); }) };
     currentFaces = { buffers: faceBuffers, inlays: inlays };
     traceT = 0;
+    lastShapeT = -1;             // new geometry: nothing has been written yet
     applySeparation(currentSeparation);
     applySeam();
     applyFaces();
@@ -948,6 +958,7 @@
   // dots and the walk cannot end up disagreeing about how far round it is.
   function applySeam(){
     if (!currentSeam) return;
+    applyFaceShape();
     // Thinner as it flattens: the diagram is one face wide, so the camera
     // ends up close, and a tube sized for the whole solid reads as a girder.
     var shrinkSeam = 1 - 0.55 * beat(morphT, 0.35, 1.0);
@@ -980,6 +991,37 @@
       });
       arr.needsUpdate = true;
     }
+  }
+
+  // The SURFACE follows the vertices too, not just the seam drawn on it.
+  // It used to be built once and left alone, so the faces were a snapshot of
+  // the solid that stayed put and faded while the graph exploded out through
+  // them -- colour peeling off the shape it belonged to. Every triangle
+  // corner now goes back to the vertex it came from, so the faces stretch
+  // with the cycle and the fade takes a surface that is still the reader's.
+  //
+  // It costs a normal recompute per frame of the morph, which is sixty-odd
+  // triangles: cheaper than the seam already redrawn beside it. The guard is
+  // there because applySeam is also the trace's per-frame call, and a solid
+  // that is not moving has nothing to rewrite.
+  var lastShapeT = -1;
+  function applyFaceShape(){
+    if (!currentFaces || !currentMorph) return;
+    if (morphT === lastShapeT) return;
+    lastShapeT = morphT;
+    var P = livePositions();
+    currentFaces.buffers.forEach(function(buf){
+      var a = buf.pos.array;
+      for (var i = 0; i < buf.idx.length; i++){
+        var q = P[buf.idx[i]];
+        a[i * 3] = q.x; a[i * 3 + 1] = q.y; a[i * 3 + 2] = q.z;
+      }
+      buf.pos.needsUpdate = true;
+      buf.geo.computeVertexNormals();
+    });
+    // The inlays are rigid triangles sitting proud of a face that is now
+    // stretching under them, so there is nothing sensible for them to follow.
+    // They leave with the rotation instead -- see applyMorph.
   }
 
   // Smoothstep over a slice of the morph, so each beat has its own window
@@ -1164,17 +1206,21 @@
     // opens while the camera is still turning face-on, so the window arrives
     // with the view.
     //
-    // The rest of the surface stays up until the vertices are well into
-    // their flight. A bare wireframe of a convex solid seen face-on is a
-    // tangle -- every far edge crosses a near one and nothing says which is
-    // in front -- so fading everything before anything moves leaves a moment
-    // where the reader loses the polyhedron. Keeping the faces means the near
-    // ones occlude the far ones and the explosion reads as depth; they leave
-    // once the graph has spread out far enough to stand on its own, and
-    // before it lands flat, where a filled face would fight the one behind
-    // it for the same plane.
+    // The rest of the surface stays up almost the whole way. A bare
+    // wireframe of a convex solid seen face-on is a tangle -- every far edge
+    // crosses a near one and nothing says which is in front -- so fading it
+    // early leaves a stretch where the reader has lost the polyhedron and
+    // not yet been given the diagram. With the surface still there the near
+    // faces occlude the far ones, the explosion reads as depth, and the last
+    // moments show the cycle cutting the finished DIAGRAM into its two caps,
+    // which is the same claim the solid was making. Only then does it go.
+    //
+    // It can stay that late because the faces of a planar embedding tile
+    // their region without overlapping: there is nothing at the end for a
+    // filled face to fight for the same plane, once the face being looked
+    // through -- the one that became the outer boundary -- has gone.
     var viewFade = 1 - beat(morphT, 0.06, 0.30);
-    var fade = 1 - beat(morphT, 0.58, 0.90);
+    var fade = 1 - beat(morphT, 0.66, 0.99);
     currentMorph.faceMats.forEach(function(m){
       m.opacity = fade;
       m.visible = fade > 0.01;
