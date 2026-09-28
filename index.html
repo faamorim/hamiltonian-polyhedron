@@ -483,7 +483,7 @@
   var currentMorph = null; // the flattening: where every vertex starts and ends
   var morphT = 0;          // 0 = the solid, 1 = the Schlegel diagram
   var morphTarget = 0;     // what it is heading for
-  var MORPH_SECONDS = 2.6;
+  var MORPH_SECONDS = 3.2;
   var _d = new THREE.Vector3();
   var _a = new THREE.Vector3();
   var seamWidth = 1.0;     // the slider
@@ -572,12 +572,28 @@
       if (partition.adj[fi].length === 1) endFaces[fi] = true;
     });
 
+    // The diagram this solid flattens into. It is laid in the plane of the
+    // face it is seen through, at that face's own size, so the outer face
+    // lands exactly where the real one already is and every other vertex
+    // flies inside it -- which is what a Schlegel diagram is, rather than a
+    // second picture that happens to resemble one.
+    //
+    // It is Tutte's embedding of THIS page's graph, not the worksheet's
+    // drawing: see tutteLayout for why shipping the printed one here was
+    // unsound. Same graph and same cycle, a different drawing of it.
+    var lay = tutteLayout(data);
+    // The face the diagram is seen through. It is built with a material of
+    // its own, because it has to be able to go while the rest of the
+    // surface stays: see applyMorph.
+    var viewFace = lay ? lay.viewFace : -1;
+
     var groups = [];
     var seamEdges = [];
     var seamDots = [];
     var faceBuffers = [];
     var inlays = [];
     var faceMats = [];
+    var viewMats = [];
     for (var g = 0; g < 2; g++){
       var container = new THREE.Group();
 
@@ -596,7 +612,28 @@
       });
       mat.transparent = true;
       faceMats.push(mat);
-      container.add(new THREE.Mesh(geo, mat));
+
+      // One mesh per cap, but the face we look through gets its own slice of
+      // it. A geometry group over that face's triangles, pointing at a second
+      // material, is all it takes -- the positions and the per-vertex colours
+      // stay one array, so the trace, the flattening and the paint are
+      // untouched.
+      var mats = mat;
+      var viewSpan = null;
+      faceSpans[g].forEach(function(span){
+        if (span.face === viewFace) viewSpan = span;
+      });
+      if (viewSpan){
+        var viewMat = mat.clone();
+        viewMats.push(viewMat);
+        mats = [mat, viewMat];
+        var total = posArrays[g].length / 3;
+        if (viewSpan.start > 0) geo.addGroup(0, viewSpan.start, 0);
+        geo.addGroup(viewSpan.start, viewSpan.count, 1);
+        var after = total - (viewSpan.start + viewSpan.count);
+        if (after > 0) geo.addGroup(viewSpan.start + viewSpan.count, after, 0);
+      }
+      container.add(new THREE.Mesh(geo, mats));
       faceBuffers.push({ attr: geo.getAttribute("color"), spans: faceSpans[g], cap: g });
 
       // The seam is real geometry, one tube per cycle edge, not a line.
@@ -661,7 +698,8 @@
             side: THREE.DoubleSide, flatShading: true, roughness: 0.55
           }));
           container.add(im);
-          inlays.push({ mesh: im, paintAt: span.paintAt });
+          im.material.transparent = true;
+          inlays.push({ mesh: im, paintAt: span.paintAt, face: span.face });
         });
       }
 
@@ -669,16 +707,6 @@
       groups.push(container);
     }
 
-    // The diagram this solid flattens into. It is laid in the plane of the
-    // face it is seen through, at that face's own size, so the outer face
-    // lands exactly where the real one already is and every other vertex
-    // flies inside it -- which is what a Schlegel diagram is, rather than a
-    // second picture that happens to resemble one.
-    //
-    // It is Tutte's embedding of THIS page's graph, not the worksheet's
-    // drawing: see tutteLayout for why shipping the printed one here was
-    // unsound. Same graph and same cycle, a different drawing of it.
-    var lay = tutteLayout(data);
     var flat = null, viewNormal = null, faceSpan = 1;
     if (lay){
       var vf = data.faces[lay.viewFace];
@@ -761,7 +789,8 @@
       normal: viewNormal, span: faceSpan, wire: wire, pairs: pairs,
       centre: (lay ? c0.clone() : new THREE.Vector3()),
       up: (lay ? vax.clone() : new THREE.Vector3(0, 0, 1)),
-      faceMats: faceMats, canFlatten: !!flat
+      faceMats: faceMats, viewMats: viewMats, viewFace: viewFace,
+      inlays: inlays, canFlatten: !!flat
     };
 
     currentGroups = groups;
@@ -1089,12 +1118,39 @@
   // same way applySeam does for the seam.
   function applyMorph(){
     if (!currentMorph) return;
-    var fade = 1 - beat(morphT, 0.30, 0.58);       // faces go
+    // Two clocks for the surface, not one.
+    //
+    // The face we look THROUGH goes first, and goes completely: that hole is
+    // the whole difference between a solid and a Schlegel diagram, and it
+    // opens while the camera is still turning face-on, so the window arrives
+    // with the view.
+    //
+    // The rest of the surface stays up until the vertices are well into
+    // their flight. A bare wireframe of a convex solid seen face-on is a
+    // tangle -- every far edge crosses a near one and nothing says which is
+    // in front -- so fading everything before anything moves leaves a moment
+    // where the reader loses the polyhedron. Keeping the faces means the near
+    // ones occlude the far ones and the explosion reads as depth; they leave
+    // once the graph has spread out far enough to stand on its own, and
+    // before it lands flat, where a filled face would fight the one behind
+    // it for the same plane.
+    var viewFade = 1 - beat(morphT, 0.06, 0.30);
+    var fade = 1 - beat(morphT, 0.58, 0.90);
     currentMorph.faceMats.forEach(function(m){
       m.opacity = fade;
       m.visible = fade > 0.01;
     });
-    currentMorph.wire.material.opacity = 0.25 + 0.75 * beat(morphT, 0.30, 0.70);
+    currentMorph.viewMats.forEach(function(m){
+      m.opacity = Math.min(fade, viewFade);
+      m.visible = m.opacity > 0.01;
+    });
+    // The inlays are proud of the surface: left alone they hang in the air
+    // after the face under them has gone.
+    currentMorph.inlays.forEach(function(inl){
+      inl.mesh.material.opacity =
+        (inl.face === currentMorph.viewFace) ? Math.min(fade, viewFade) : fade;
+    });
+    currentMorph.wire.material.opacity = 0.25 + 0.75 * beat(morphT, 0.45, 0.88);
     currentMorph.wire.visible = true;
 
     if (morphT <= 0 && currentMorph.home){
