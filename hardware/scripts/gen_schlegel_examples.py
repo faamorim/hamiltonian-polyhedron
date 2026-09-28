@@ -125,9 +125,23 @@ def check(route, adj, n, closed):
 
 
 def draw(ax, pts, edges, route, colour, closed, visited_all, trapped=False):
+    # With no route the graph IS the subject, so it is drawn in ink rather
+    # than as the faint backdrop it becomes once a walk is laid over it.
+    bare = not route
+    ax.set_aspect("equal")
     for a, b in edges:
         ax.plot([pts[a][0], pts[b][0]], [pts[a][1], pts[b][1]],
-                color=FAINT, lw=1.6, zorder=1, solid_capstyle="round")
+                color=INK if bare else FAINT, lw=1.7 if bare else 1.6,
+                zorder=1, solid_capstyle="round")
+    if bare:
+        for x, y in pts:
+            ax.add_patch(plt.Circle((x, y), 0.030, facecolor="white",
+                                    edgecolor=INK, linewidth=2.0, zorder=3))
+        ax.axis("off")
+        pad = 0.10
+        ax.set_xlim(pts[:, 0].min() - pad, pts[:, 0].max() + pad)
+        ax.set_ylim(pts[:, 1].min() - pad, pts[:, 1].max() + pad)
+        return
     seq = route + [route[0]] if closed else route
     for a, b in zip(seq, seq[1:]):
         ax.plot([pts[a][0], pts[b][0]], [pts[a][1], pts[b][1]],
@@ -234,6 +248,24 @@ if __name__ == "__main__":
                  weight="bold", color=INK)
         fig.text(0.5, 0.905, sub, ha="center", fontsize=13, color="#5b6474")
         out = f"hardware/tests/schlegel_{name}_{['cycle','path','trapped'][i]}.png"
+        fig.savefig(out, dpi=200, facecolor="white")
+        plt.close(fig)
+        print(f"  wrote {out}")
+
+    # the graph on its own, for the slide that comes before anyone has drawn
+    # anything on it -- once with its name, once bare for a deck that puts
+    # the title in its own furniture
+    for suffix, titled in (("blank", True), ("blank_bare", False)):
+        fig = plt.figure(figsize=(6.6, 6.4 if titled else 5.6))
+        ax = fig.add_axes([0.02, 0.02, 0.96, 0.82 if titled else 0.96])
+        draw(ax, pts, edges, [], INK, False, n)
+        if titled:
+            fig.text(0.5, 0.955, "Schlegel diagram of an icosahedron",
+                     ha="center", fontsize=18, weight="bold", color=INK)
+            fig.text(0.5, 0.905,
+                     f"{n} vertices, {len(edges)} edges, five at every vertex",
+                     ha="center", fontsize=13, color="#5b6474")
+        out = f"hardware/tests/schlegel_{name}_{suffix}.png"
         fig.savefig(out, dpi=200, facecolor="white")
         plt.close(fig)
         print(f"  wrote {out}")
