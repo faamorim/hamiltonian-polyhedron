@@ -77,20 +77,25 @@ def hamiltonian_path(adj, n):
     return None
 
 
-def trapped_walk(adj, n, want_left=2):
-    """A walk that cannot be continued while vertices remain. Preferred short
-    and leaving few vertices out, because a route that dies two steps from
-    the end makes the point better than one that dies immediately."""
+def trapped_walk(adj, n):
+    """A walk that is stuck at BOTH ends with vertices still unvisited.
+
+    A pencil line on paper has two ends, and either of them may be picked up
+    and carried on -- so a route whose head can still move is not trapped,
+    it is unfinished. Only when every neighbour of both ends has already
+    been used is the attempt actually over, and only then is a leftover
+    vertex genuinely unreachable.
+
+    Preferred: the fewest vertices left out, then the longest walk, because
+    a route that strands one vertex makes the point better than one that
+    strands five."""
     found = []
 
     def walk(path, seen):
-        if len(found) > 400:
-            return
-        end = path[-1]
-        if len(path) < n and not (adj[end] - seen):
+        if len(path) < n and not (adj[path[0]] - seen) and not (adj[path[-1]] - seen):
             found.append(list(path))
-            return
-        for nb in sorted(adj[end]):
+            return                      # stuck: nothing to extend
+        for nb in sorted(adj[path[-1]]):
             if nb not in seen:
                 walk(path + [nb], seen | {nb})
 
@@ -98,8 +103,7 @@ def trapped_walk(adj, n, want_left=2):
         walk([start], {start})
     if not found:
         return None
-    exact = [p for p in found if n - len(p) == want_left]
-    return max(exact or found, key=len)
+    return min(found, key=lambda p: (n - len(p), -len(p)))
 
 
 def check(route, adj, n, closed):
@@ -128,7 +132,7 @@ def draw(ax, pts, edges, route, colour, closed, visited_all, trapped=False):
                                 linewidth=2.0 if on else 2.4,
                                 linestyle="-" if on else (0, (1.6, 1.4)),
                                 zorder=3))
-    def label(v, text):
+    def label(v, text, ink):
         """Pushed straight out from the middle of the drawing, so it never
         lands on the vertex it names or on an edge running past it."""
         x, y = pts[v]
@@ -136,24 +140,30 @@ def draw(ax, pts, edges, route, colour, closed, visited_all, trapped=False):
         d = d / (np.linalg.norm(d) or 1.0)
         lx, ly = x + d[0] * 0.105, y + d[1] * 0.105
         ax.text(lx, ly, text, ha="center", va="center", fontsize=12,
-                color=colour, weight="bold", zorder=5,
+                color=ink, weight="bold", zorder=5,
                 bbox=dict(boxstyle="round,pad=0.18", facecolor="white",
                           edgecolor="none", alpha=0.92))
 
-    if not closed:
+    if trapped:
+        # both ends, because both are dead -- that is what makes it trapped
+        for v in (route[0], route[-1]):
+            ex, ey = pts[v]
+            d = 0.030
+            for sgn in (1, -1):
+                ax.plot([ex - d, ex + d], [ey - sgn * d, ey + sgn * d],
+                        color="white", lw=2.6, zorder=4, solid_capstyle="round")
+            label(v, "stuck", colour)
+        for v in sorted(set(range(len(pts))) - seen):
+            x, y = pts[v]
+            ax.add_patch(plt.Circle((x, y), 0.052, facecolor="none",
+                                    edgecolor=INK, linewidth=2.2, zorder=4))
+            label(v, "unreachable", INK)
+    elif not closed:
         x, y = pts[route[0]]
         ax.add_patch(plt.Circle((x, y), 0.052, facecolor="none",
                                 edgecolor=colour, linewidth=2.2, zorder=4))
-        label(route[0], "start")
-        ex, ey = pts[route[-1]]
-        if trapped:
-            d = 0.030
-            for s in (1, -1):
-                ax.plot([ex - d, ex + d], [ey - s * d, ey + s * d],
-                        color="white", lw=2.6, zorder=4, solid_capstyle="round")
-            label(route[-1], "stuck")
-        else:
-            label(route[-1], "end")
+        label(route[0], "start", colour)
+        label(route[-1], "end", colour)
     ax.set_aspect("equal")
     ax.axis("off")
     # Room for the labels and for a dashed marker sitting on the outline.
@@ -186,13 +196,18 @@ if __name__ == "__main__":
     check(path, adj, n, closed=False)
     check(stuck, adj, n, closed=False)
     assert len(path) == n and path[-1] not in adj[path[0]]
-    assert len(stuck) < n and not (adj[stuck[-1]] - set(stuck))
+    assert len(stuck) < n, "the trapped walk is not missing anything"
+    for end in (stuck[0], stuck[-1]):
+        assert not (adj[end] - set(stuck)), (
+            f"vertex {end} still has somewhere to go -- the walk is "
+            f"unfinished, not trapped")
 
     print(f"{solid.name}: {n} vertices, {len(edges)} edges, drawing the {label}")
     print(f"  cycle   {len(cycle)} vertices, closes")
     print(f"  path    {len(path)} vertices, ends {path[0]} and {path[-1]} "
           f"are not adjacent")
-    print(f"  trapped {len(stuck)} vertices, {n - len(stuck)} never reached: "
+    print(f"  trapped {len(stuck)} vertices, both ends ({stuck[0]}, {stuck[-1]}) "
+          f"blocked, {n - len(stuck)} never reached: "
           f"{sorted(set(range(n)) - set(stuck))}")
 
     panels = [
@@ -201,7 +216,8 @@ if __name__ == "__main__":
         (path, PATH_C, False, "Hamiltonian path",
          "every vertex once, but the ends do not meet"),
         (stuck, STUCK_C, False, "trapped",
-         f"{n - len(stuck)} vertices never reached, and nowhere left to go"),
+         f"both ends blocked, {n - len(stuck)} "
+         f"{'vertex' if n - len(stuck) == 1 else 'vertices'} never reached"),
     ]
     for i, (route, colour, closed, title, sub) in enumerate(panels):
         fig = plt.figure(figsize=(6.6, 6.4))

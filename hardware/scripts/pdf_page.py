@@ -16,25 +16,17 @@ MM_PER_INCH = 25.4
 MARGIN_MM = 10    # safe margin on all sides (most printers can't print edge-to-edge)
 HEADER_MM = 15    # vertical space reserved for the title at the top
 
-SCALE_BAR_MM = 50.0     # length of the printed ruler
-SCALE_TICK_MM = 10.0    # spacing of its ticks
-
-
-def draw_scale_bar(ax, x=MARGIN_MM, y=PAGE_H_MM - MARGIN_MM - 9.0):
-    """A ruler printed on the page, because no page size can defend against
-    the real hazard: a print dialog set to 'fit to page'. That silently
-    rescales by about 5% between A4 and Letter, which is invisible on the
-    drawing but wrong in every edge length -- and these templates are only
-    worth anything at 1:1. Measure the bar; if it is not 50mm, reprint.
-    """
-    ax.plot([x, x + SCALE_BAR_MM], [y, y], color="black", lw=1.0,
-            solid_capstyle="butt", zorder=5)
-    n = int(round(SCALE_BAR_MM / SCALE_TICK_MM))
-    for k in range(n + 1):
-        tx = x + k * SCALE_TICK_MM
-        ax.plot([tx, tx], [y, y + (2.5 if k in (0, n) else 1.5)],
-                color="black", lw=1.0, zorder=5)
-    ax.text(x, y - 3.2,
-            f"{SCALE_BAR_MM:.0f}mm - measure it. If it is short, the printer "
-            f"scaled the page; reprint at 100%, not 'fit to page'.",
-            ha="left", va="top", fontsize=6, color="0.35")
+# NO PRINTED RULER, deliberately, and it was here once. The argument for it
+# was that "fit to page" silently rescales by about 5% between A4 and
+# Letter, so measure the bar and reprint if it is short. That argument is
+# wrong for paper: a net at 95% folds into a solid at 95%, every edge and
+# every tab scaled together, and it works exactly as well. The one thing in
+# this project that genuinely cannot be scaled is the STL, whose hinge is a
+# fixed thickness in millimetres while its faces are not -- and that warning
+# belongs on the STL, where it already is.
+#
+# So the ruler only ever bought a false constraint, and charged for it: a
+# reader who measured 47mm reprinted a sheet that was going to be fine. The
+# page is still sized to the A4/Letter overlap, so anyone who does print at
+# 100% gets the edge length quoted on the web page; anyone who does not gets
+# a slightly smaller polyhedron and no worse an afternoon.
