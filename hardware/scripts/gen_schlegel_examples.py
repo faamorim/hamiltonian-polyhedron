@@ -26,6 +26,7 @@ Requires: pip install matplotlib numpy
 Run from the repo root.
 """
 
+import math
 import sys
 
 import matplotlib
@@ -86,9 +87,17 @@ def trapped_walk(adj, n):
     been used is the attempt actually over, and only then is a leftover
     vertex genuinely unreachable.
 
-    Preferred: the fewest vertices left out, then the longest walk, because
-    a route that strands one vertex makes the point better than one that
-    strands five."""
+    Preferred, in order: ends that are NOT adjacent, then the fewest
+    vertices left out, then the longest walk.
+
+    The ends matter for a reason that is about the audience rather than the
+    mathematics. If the two dead ends happen to share an edge, the drawing
+    invites "well, just join them" -- and joining them makes a closed loop
+    that still misses a vertex, which is a fourth case nobody needed and an
+    argument in the middle of a slide. It is not a better or worse failure
+    than any other; it is the same failure, and the picture should not imply
+    otherwise. On the icosahedron 12960 trapped walks strand exactly one
+    vertex with the ends apart, so avoiding the question costs nothing."""
     found = []
 
     def walk(path, seen):
@@ -103,7 +112,7 @@ def trapped_walk(adj, n):
         walk([start], {start})
     if not found:
         return None
-    return min(found, key=lambda p: (n - len(p), -len(p)))
+    return min(found, key=lambda p: (p[-1] in adj[p[0]], n - len(p), -len(p)))
 
 
 def check(route, adj, n, closed):
@@ -133,16 +142,35 @@ def draw(ax, pts, edges, route, colour, closed, visited_all, trapped=False):
                                 linestyle="-" if on else (0, (1.6, 1.4)),
                                 zorder=3))
     def label(v, text, ink):
-        """Pushed straight out from the middle of the drawing, so it never
-        lands on the vertex it names or on an edge running past it."""
+        """Put the caption in whichever direction around its own vertex is
+        emptiest.
+
+        Pushing it radially outward from the middle of the drawing is what
+        this did first, and it fails twice over: a vertex near the centre
+        has no reliable "outward", and on an inner ring the push lands the
+        word on top of the NEXT vertex, so the label names the wrong dot.
+        Eight candidate directions, scored by how far the word ends up from
+        every other vertex, costs nothing and cannot do that."""
         x, y = pts[v]
-        d = np.array([x, y], float)
-        d = d / (np.linalg.norm(d) or 1.0)
-        lx, ly = x + d[0] * 0.105, y + d[1] * 0.105
-        ax.text(lx, ly, text, ha="center", va="center", fontsize=12,
-                color=ink, weight="bold", zorder=5,
-                bbox=dict(boxstyle="round,pad=0.18", facecolor="white",
-                          edgecolor="none", alpha=0.92))
+        here = np.array([x, y], float)
+        others = np.array([q for i, q in enumerate(pts) if i != v])
+        best, lx, ly = -1.0, x, y
+        for k in range(16):
+            t = k * math.pi / 8
+            cand = here + np.array([math.cos(t), math.sin(t)]) * 0.24
+            clear = float(np.linalg.norm(others - cand, axis=1).min())
+            if clear > best:
+                best, lx, ly = clear, cand[0], cand[1]
+        # far enough out to be in clear space, with a leader back to the
+        # vertex it names -- on an inner ring nowhere within a dot's reach
+        # is unambiguous, so the line does the pointing instead of proximity
+        ax.annotate(text, xy=(x, y), xytext=(lx, ly),
+                    ha="center", va="center", fontsize=12,
+                    color=ink, weight="bold", zorder=5,
+                    arrowprops=dict(arrowstyle="-", color=ink, lw=1.4,
+                                    shrinkA=2, shrinkB=7),
+                    bbox=dict(boxstyle="round,pad=0.22", facecolor="white",
+                              edgecolor="none", alpha=0.95))
 
     if trapped:
         # both ends, because both are dead -- that is what makes it trapped
@@ -170,7 +198,7 @@ def draw(ax, pts, edges, route, colour, closed, visited_all, trapped=False):
     # From the drawing's own box, not symmetric about the origin: a Schlegel
     # diagram is a triangle here, so symmetric limits hang it off centre and
     # waste half the panel.
-    pad = 0.17
+    pad = 0.28
     ax.set_xlim(pts[:, 0].min() - pad, pts[:, 0].max() + pad)
     ax.set_ylim(pts[:, 1].min() - pad, pts[:, 1].max() + pad)
 
@@ -197,6 +225,9 @@ if __name__ == "__main__":
     check(stuck, adj, n, closed=False)
     assert len(path) == n and path[-1] not in adj[path[0]]
     assert len(stuck) < n, "the trapped walk is not missing anything"
+    assert stuck[-1] not in adj[stuck[0]], (
+        "the trapped walk's two dead ends share an edge, so it reads as a "
+        "loop with one vertex missing -- a case the slide does not want")
     for end in (stuck[0], stuck[-1]):
         assert not (adj[end] - set(stuck)), (
             f"vertex {end} still has somewhere to go -- the walk is "
