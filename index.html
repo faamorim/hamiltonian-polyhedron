@@ -489,7 +489,25 @@
   var currentMorph = null; // the flattening: where every vertex starts and ends
   var morphT = 0;          // 0 = the solid, 1 = the Schlegel diagram
   var morphTarget = 0;     // what it is heading for
-  var MORPH_SECONDS = 3.2;
+  var MORPH_SECONDS = 3.8;
+
+  // The flattening happens in stages that do not overlap, and this is the
+  // whole timetable. Every beat() below quotes a pair from it.
+  //
+  //   0.00 - 0.28  turn      the nearest face swings to face the camera
+  //   0.28 - 0.38  hold      the solid sits still, that face square on
+  //   0.38 - 0.56  open      that face alone fades; nothing else moves
+  //   0.56 - 0.60  hold
+  //   0.60 - 1.00  explode   the vertices fly out to the diagram
+  //   0.74 - 0.99  clear     the rest of the surface goes
+  //
+  // They used to overlap: the face began fading at 0.06, while the camera
+  // was still turning. When the reader was already looking near enough
+  // square at a face there was no turn to speak of, so the face they were
+  // about to look THROUGH disappeared before they had seen it -- the
+  // animation skipped its own first sentence. The holds are there so each
+  // stage is read as having finished before the next one starts.
+  var TURN = [0.0, 0.28], OPEN = [0.38, 0.56], BURST = [0.60, 1.0];
   var morphHome = null;    // the camera to give back when it unflattens
   var _d = new THREE.Vector3();
   var _a = new THREE.Vector3();
@@ -961,7 +979,7 @@
     applyFaceShape();
     // Thinner as it flattens: the diagram is one face wide, so the camera
     // ends up close, and a tube sized for the whole solid reads as a girder.
-    var shrinkSeam = 1 - 0.55 * beat(morphT, 0.35, 1.0);
+    var shrinkSeam = 1 - 0.55 * beat(morphT, 0.04, 0.40);   // with the turn
     var r = SEAM_R * seamWidth * shrinkSeam;
     var dotScale = Math.max(1, (r * 1.45) / DOT_R) * shrinkSeam;
     var P = livePositions();
@@ -1037,7 +1055,7 @@
   function livePositions(){
     if (!currentMorph) return [];
     if (morphT <= 0) return currentMorph.base;
-    var e = beat(morphT, 0.45, 1.0);
+    var e = beat(morphT, BURST[0], BURST[1]);
     return currentMorph.base.map(function(p, i){
       return p.clone().lerp(currentMorph.flat[i], e);
     });
@@ -1221,9 +1239,10 @@
     // Two clocks for the surface, not one.
     //
     // The face we look THROUGH goes first, and goes completely: that hole is
-    // the whole difference between a solid and a Schlegel diagram, and it
-    // opens while the camera is still turning face-on, so the window arrives
-    // with the view.
+    // the whole difference between a solid and a Schlegel diagram. It opens
+    // in a stage of its own, after the turn has finished and before anything
+    // moves, so the reader sees WHICH face is being opened before it is not
+    // there any more.
     //
     // The rest of the surface stays up almost the whole way. A bare
     // wireframe of a convex solid seen face-on is a tangle -- every far edge
@@ -1238,8 +1257,8 @@
     // their region without overlapping: there is nothing at the end for a
     // filled face to fight for the same plane, once the face being looked
     // through -- the one that became the outer boundary -- has gone.
-    var viewFade = 1 - beat(morphT, 0.06, 0.30);
-    var fade = 1 - beat(morphT, 0.66, 0.99);
+    var viewFade = 1 - beat(morphT, OPEN[0], OPEN[1]);
+    var fade = 1 - beat(morphT, 0.74, 0.99);
     currentMorph.faceMats.forEach(function(m){ setFade(m, fade); });
     currentMorph.viewMats.forEach(function(m){ setFade(m, Math.min(fade, viewFade)); });
     // The inlays go with the turn, not with the surface. They are proud of
@@ -1249,7 +1268,7 @@
     // in a flat graph. Out early, while the solid is still rotating, and the
     // reader never has to watch them try to follow the explosion.
     currentMorph.inlays.forEach(function(inl){ setFade(inl.mesh.material, viewFade); });
-    currentMorph.wire.material.opacity = 0.25 + 0.75 * beat(morphT, 0.45, 0.88);
+    currentMorph.wire.material.opacity = 0.25 + 0.75 * beat(morphT, 0.58, 0.92);
     currentMorph.wire.visible = true;
 
     if (morphT <= 0 && morphHome){
@@ -1265,7 +1284,7 @@
       morphHome = null;
     }
     if (morphT > 0 && morphHome && currentMorph.normal){
-      var e = beat(morphT, 0.0, 0.55);
+      var e = beat(morphT, TURN[0], TURN[1]);
       // The diagram is not centred where the solid is: it lies in the plane
       // of the face it is seen through, a face's inradius out from the
       // middle. Aiming at the origin the whole way leaves it half off the
