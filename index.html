@@ -1226,23 +1226,35 @@
   });
   controls.autoRotateSpeed = 1.6;
 
-  // Fading a face is not just its opacity: it has to stop WRITING DEPTH as
-  // well, or it goes black rather than clear.
+  // Fading a face is its opacity and, for one face only, its depth writing.
   //
   // A half-transparent face still fills the depth buffer, so everything
   // behind it fails the test and is never drawn -- and what the reader sees
   // is the face's colour blended against the page background, which is very
-  // nearly black. The face we look through appeared to darken into a hole
-  // instead of opening one, and the inside of the solid, the whole reason
-  // for opening it, stayed hidden until the face had gone entirely.
+  // nearly black. That is why the face we look through stops writing depth
+  // as it fades: it darkened into a hole instead of opening one, and the
+  // inside of the solid, the whole reason for opening it, stayed hidden
+  // until the face had gone entirely.
   //
-  // Depth writing stays on while a face is fully opaque, because that is
-  // what draws a solid correctly. It goes off the moment the face is
-  // see-through, which is exactly when it has no business hiding anything.
-  function setFade(m, o){
+  // Only that face, though, and only because it is drawn last. Giving every
+  // face the same treatment took the depth buffer away from the whole
+  // surface at once, and with it the only thing deciding which face is in
+  // front: what was left was the order the triangles happen to sit in the
+  // buffer, and the cap holding the view face draws second. At the frame the
+  // general fade began, the two near teal faces were overpainted by the red
+  // ones BEHIND them -- 78372 pixels moving more than 60 levels in one step,
+  // against 13-16 thousand in the steps either side. A fade that swaps two
+  // faces over is not a fade.
+  //
+  // So `overlay` is a promise about draw order, not a preference: pass true
+  // only for a material drawn after everything it should be blending over,
+  // which here is the view face and nothing else. Everything else keeps its
+  // depth writing and therefore keeps its place, and fades without ever
+  // changing what is in front of what.
+  function setFade(m, o, overlay){
     m.opacity = o;
     m.visible = o > 0.01;
-    m.depthWrite = o > 0.999;
+    m.depthWrite = overlay ? o > 0.999 : true;
   }
 
   // One place decides what the flattening looks like at a given moment, the
@@ -1272,15 +1284,18 @@
     // through -- the one that became the outer boundary -- has gone.
     var viewFade = 1 - beat(morphT, OPEN[0], OPEN[1]);
     var fade = 1 - beat(morphT, 0.74, 0.99);
-    currentMorph.faceMats.forEach(function(m){ setFade(m, fade); });
-    currentMorph.viewMats.forEach(function(m){ setFade(m, Math.min(fade, viewFade)); });
+    currentMorph.faceMats.forEach(function(m){ setFade(m, fade, false); });
+    currentMorph.viewMats.forEach(function(m){ setFade(m, Math.min(fade, viewFade), true); });
     // The inlays go with the turn, not with the surface. They are proud of
     // the faces rather than part of them, so a fade that tracks the face
     // under each one leaves them floating a moment either way, and they are
     // a fact about the PRINTED object -- there is nothing for them to mean
     // in a flat graph. Out early, while the solid is still rotating, and the
     // reader never has to watch them try to follow the explosion.
-    currentMorph.inlays.forEach(function(inl){ setFade(inl.mesh.material, viewFade); });
+    // Not overlays: an inlay sits proud of its face and is drawn BEFORE the
+    // cap, so it needs its depth writing to stay in front of the face it
+    // belongs to.
+    currentMorph.inlays.forEach(function(inl){ setFade(inl.mesh.material, viewFade, false); });
     currentMorph.wire.material.opacity = 0.25 + 0.75 * beat(morphT, 0.58, 0.92);
     currentMorph.wire.visible = true;
 
