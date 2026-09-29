@@ -524,7 +524,6 @@
     if (currentGroups){
       currentGroups.forEach(function(g){ scene.remove(g); });
     }
-    if (currentMorph && currentMorph.wire) scene.remove(currentMorph.wire);
     currentGroups = null;
     currentDirections = null;
     currentMorph = null;
@@ -646,6 +645,7 @@
     var seamEdges = [];
     var seamDots = [];
     var seamRunners = [];
+    var wires = [];
     var faceBuffers = [];
     var inlays = [];
     var faceMats = [];
@@ -759,6 +759,32 @@
       container.add(runner);
       seamRunners.push({ mesh: runner, shrink: shrink });
 
+      // This cap's edges, as lines. It belongs to the CAP, not to the scene:
+      // a single wireframe of the whole solid cannot be in two places, so
+      // when the caps were pulled apart it stayed behind, a ghost of the
+      // solid hanging in the gap where the split had been.
+      //
+      // Each cap draws the edges of its own faces, so an edge the cycle cut
+      // is drawn by both -- which is the same thing the tubes and the dots
+      // do, and the same claim: both caps keep the whole cycle on their rim.
+      var capPairs = [];
+      var seenCapEdge = {};
+      data.faces.forEach(function(f, fi){
+        if (compOf[fi] !== g) return;
+        for (var k = 0; k < f.length; k++){
+          var a2 = f[k], b2 = f[(k + 1) % f.length];
+          var key2 = Math.min(a2, b2) + "-" + Math.max(a2, b2);
+          if (!seenCapEdge[key2]){ seenCapEdge[key2] = true; capPairs.push([a2, b2]); }
+        }
+      });
+      var wireGeo = new THREE.BufferGeometry();
+      wireGeo.setAttribute("position", new THREE.Float32BufferAttribute(
+        new Float32Array(capPairs.length * 6), 3));
+      var capWire = new THREE.LineSegments(wireGeo, new THREE.LineBasicMaterial({
+        color: 0x9aa3b4, transparent: true, opacity: 0 }));
+      container.add(capWire);
+      wires.push({ mesh: capWire, pairs: capPairs });
+
       // The yin-yang inlay: on each of the strip's two end faces, a scaled
       // copy of that face in the OTHER cap's colour, lifted clear of the
       // surface so it cannot z-fight. Same 0.40 as the printed part.
@@ -857,26 +883,10 @@
 
     // Every edge of the solid, as a line. In the solid it is a faint
     // scaffold under the faces; in the diagram it is the whole drawing.
-    var pairs = [];
-    var seenEdge = {};
-    data.faces.forEach(function(f){
-      for (var k = 0; k < f.length; k++){
-        var a2 = f[k], b2 = f[(k + 1) % f.length];
-        var key2 = Math.min(a2, b2) + "-" + Math.max(a2, b2);
-        if (!seenEdge[key2]){ seenEdge[key2] = true; pairs.push([a2, b2]); }
-      }
-    });
-    var wireGeo = new THREE.BufferGeometry();
-    wireGeo.setAttribute("position", new THREE.Float32BufferAttribute(
-      new Float32Array(pairs.length * 6), 3));
-    var wire = new THREE.LineSegments(wireGeo, new THREE.LineBasicMaterial({
-      color: 0x9aa3b4, transparent: true, opacity: 0 }));
-    scene.add(wire);
-
     currentMorph = {
       base: positions.map(function(p){ return p.clone(); }),
       flat: flat || positions.map(function(p){ return p.clone(); }),
-      normal: viewNormal, span: faceSpan, wire: wire, pairs: pairs,
+      normal: viewNormal, span: faceSpan, wires: wires,
       centre: (lay ? c0.clone() : new THREE.Vector3()),
       up: (lay ? vax.clone() : new THREE.Vector3(0, 0, 1)),
       faceMats: faceMats, viewMats: viewMats, viewFace: viewFace,
@@ -1052,13 +1062,15 @@
       run.mesh.position.copy(a).lerp(b, traceT - Math.floor(traceT));
       run.mesh.scale.setScalar(dotScale * run.shrink);
     });
-    if (currentMorph && currentMorph.wire){
-      var arr = currentMorph.wire.geometry.getAttribute("position");
-      currentMorph.pairs.forEach(function(pr, i){
-        arr.setXYZ(i * 2, P[pr[0]].x, P[pr[0]].y, P[pr[0]].z);
-        arr.setXYZ(i * 2 + 1, P[pr[1]].x, P[pr[1]].y, P[pr[1]].z);
+    if (currentMorph && currentMorph.wires){
+      currentMorph.wires.forEach(function(w){
+        var arr = w.mesh.geometry.getAttribute("position");
+        w.pairs.forEach(function(pr, i){
+          arr.setXYZ(i * 2, P[pr[0]].x, P[pr[0]].y, P[pr[0]].z);
+          arr.setXYZ(i * 2 + 1, P[pr[1]].x, P[pr[1]].y, P[pr[1]].z);
+        });
+        arr.needsUpdate = true;
       });
-      arr.needsUpdate = true;
     }
   }
 
@@ -1379,8 +1391,11 @@
       inl.morphU = viewFade;
       inlayFade(inl);
     });
-    currentMorph.wire.material.opacity = 0.25 + 0.75 * beat(morphT, 0.58, 0.92);
-    currentMorph.wire.visible = true;
+    var wireOp = 0.25 + 0.75 * beat(morphT, 0.58, 0.92);
+    currentMorph.wires.forEach(function(w){
+      w.mesh.material.opacity = wireOp;
+      w.mesh.visible = true;
+    });
 
     if (morphT <= 0 && morphHome){
       // Land exactly where we started. Anything short of this leaves the
