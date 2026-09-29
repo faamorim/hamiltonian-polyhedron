@@ -769,7 +769,8 @@
           }));
           container.add(im);
           im.material.transparent = true;
-          inlays.push({ mesh: im, paintAt: span.paintAt, face: span.face });
+          inlays.push({ mesh: im, paintAt: span.paintAt, face: span.face,
+                        traceU: 1, morphU: 1 });
         });
       }
 
@@ -1076,14 +1077,33 @@
 
   // Which faces are painted, and which are still waiting for the seam.
   // Called from the same places applySeam is, for the same reason.
-  var _c = new THREE.Color();
+  var _c = new THREE.Color(), _cap = new THREE.Color();
+  // How far the edge that paints this face has been drawn, from 0 to 1.
+  //
+  // It is the SAME number the tube is being grown by, not a second clock
+  // running alongside it: an edge k is stepped at k and paints its faces at
+  // k + 1, so subtracting one from the face's step recovers the growth of
+  // the very edge doing the painting. The colour front and the tip of the
+  // tube are therefore the same event, and cannot drift apart.
+  function cut(paintAt){
+    if (!tracing) return 1;
+    return Math.min(1, Math.max(0, traceT - (paintAt - 1)));
+  }
+
   function applyFaces(){
     if (!currentFaces) return;
     var caps = PALETTES[paletteName].caps;
     currentFaces.buffers.forEach(function(buf){
       var arr = buf.attr.array;
+      _cap.setHex(caps[buf.cap]);
       buf.spans.forEach(function(span){
-        _c.setHex((tracing && traceT < span.paintAt) ? NEUTRAL : caps[buf.cap]);
+        // Grey until the seam reaches it, its own colour once the seam has
+        // passed, and on the way between the two while the seam is actually
+        // crossing it -- the face takes its side as it is being cut, rather
+        // than at the instant the cut finishes. The claim is that the cycle
+        // SPLITS the solid, and a colour that arrives with the blade says
+        // that; one that snaps on afterwards only reports it.
+        _c.setHex(NEUTRAL).lerp(_cap, cut(span.paintAt));
         for (var i = span.start; i < span.start + span.count; i++){
           arr[i * 3] = _c.r; arr[i * 3 + 1] = _c.g; arr[i * 3 + 2] = _c.b;
         }
@@ -1091,8 +1111,17 @@
       buf.attr.needsUpdate = true;
     });
     currentFaces.inlays.forEach(function(inl){
-      inl.mesh.visible = !(tracing && traceT < inl.paintAt);
+      inl.traceU = cut(inl.paintAt);
+      inlayFade(inl);
     });
+  }
+
+  // An inlay is faded by two things that do not know about each other -- the
+  // seam arriving, and the flattening taking the solid away -- so each keeps
+  // its own factor and the material gets the product. Writing the material
+  // directly from either one let whichever ran second erase the other.
+  function inlayFade(inl){
+    setFade(inl.mesh.material, inl.traceU * inl.morphU, false);
   }
 
   function applyPalette(){
@@ -1292,10 +1321,10 @@
     // a fact about the PRINTED object -- there is nothing for them to mean
     // in a flat graph. Out early, while the solid is still rotating, and the
     // reader never has to watch them try to follow the explosion.
-    // Not overlays: an inlay sits proud of its face and is drawn BEFORE the
-    // cap, so it needs its depth writing to stay in front of the face it
-    // belongs to.
-    currentMorph.inlays.forEach(function(inl){ setFade(inl.mesh.material, viewFade, false); });
+    currentMorph.inlays.forEach(function(inl){
+      inl.morphU = viewFade;
+      inlayFade(inl);
+    });
     currentMorph.wire.material.opacity = 0.25 + 0.75 * beat(morphT, 0.58, 0.92);
     currentMorph.wire.visible = true;
 
