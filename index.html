@@ -677,6 +677,44 @@
     });
   }
 
+  // Which way up to hold the diagram -- the nearest way, not the canonical one.
+  //
+  // Picking the nearest face stopped the solid swinging half a turn, but left
+  // the ROLL free: the layout has its own idea of up, and the solid span
+  // about the viewing axis to meet it, by as much as 180 degrees.
+  //
+  // It does not have to. Tutte pins the view face to a REGULAR polygon, so
+  // rolling the view by a multiple of 2*PI/k maps that polygon onto itself:
+  // the same picture with a different vertex of it on top, and every one of
+  // the k choices as valid a diagram as the others. Taking the one nearest
+  // to how the reader is holding it bounds the roll at 180/k degrees -- 60
+  // on a triangular face, 45 on a square, 36 on a pentagon -- instead of
+  // half a turn.
+  //
+  // Measured against the camera's up rather than the world's, because that
+  // is the vector the morph actually interpolates. If the face is being
+  // looked at from so nearly along that axis that the projection has no
+  // direction left, the camera's real screen-up stands in for it, and if
+  // that fails too the layout keeps its own up.
+  function nearestUp(plan){
+    var ref = camera.up.clone().projectOnPlane(plan.normal);
+    if (ref.lengthSq() < 1e-6){
+      camera.updateMatrixWorld();
+      ref.setFromMatrixColumn(camera.matrixWorld, 1).projectOnPlane(plan.normal);
+    }
+    if (ref.lengthSq() < 1e-6) return plan.up;
+    ref.normalize();
+
+    var k = currentMorph.data.faces[plan.viewFace].length;
+    var best = plan.up.clone(), bestDot = -Infinity;
+    for (var j = 0; j < k; j++){
+      var cand = plan.up.clone().applyAxisAngle(plan.normal, 2 * Math.PI * j / k);
+      var d = cand.dot(ref);
+      if (d > bestDot){ bestDot = d; best = cand; }
+    }
+    return best;
+  }
+
   // Choose a face, work out the flattening for it, and cut it out of its cap.
   // Cheap enough to do on a tick: the solve is a few thousand sweeps over
   // twenty vertices.
@@ -689,7 +727,7 @@
     currentMorph.normal = plan.normal;
     currentMorph.span = plan.span;
     currentMorph.centre = plan.centre;
-    currentMorph.up = plan.up;
+    currentMorph.up = nearestUp(plan);
     currentMorph.canFlatten = true;
     // How long the turn should take, now that it is a real angle rather than
     // whatever face 0 happened to be. Nearest-face picking never asks for
