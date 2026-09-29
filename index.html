@@ -1085,9 +1085,26 @@
   // k + 1, so subtracting one from the face's step recovers the growth of
   // the very edge doing the painting. The colour front and the tip of the
   // tube are therefore the same event, and cannot drift apart.
+  //
+  // The colour does not start with the edge, though. Reading the same 0-to-1
+  // straight off meant that by the time you had worked out which edge was
+  // being drawn, its faces were already most of the way to their colour, and
+  // the colouring stopped looking like a consequence of the cut. So the
+  // colour keeps the finish line and gives up the start: nothing for the
+  // first PAINT_LAG of the edge, then the whole change compressed into what
+  // is left. Later, and faster, landing on the same instant.
+  //
+  // Squared rather than straight, so the delay has no edge of its own: a
+  // linear ramp beginning part way along an edge starts at full speed, which
+  // is a second event to notice. This one starts at a standstill and arrives
+  // at full speed exactly as the edge closes, which is the moment that
+  // actually means something.
+  var PAINT_LAG = 0.5;      // of the edge, before any colour moves at all
   function cut(paintAt){
     if (!tracing) return 1;
-    return Math.min(1, Math.max(0, traceT - (paintAt - 1)));
+    var x = Math.min(1, Math.max(0, traceT - (paintAt - 1)));
+    var t = Math.max(0, (x - PAINT_LAG) / (1 - PAINT_LAG));
+    return t * t;
   }
 
   function applyFaces(){
