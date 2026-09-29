@@ -645,6 +645,7 @@
     var groups = [];
     var seamEdges = [];
     var seamDots = [];
+    var seamRunners = [];
     var faceBuffers = [];
     var inlays = [];
     var faceMats = [];
@@ -739,6 +740,24 @@
         container.add(dot);
         seamDots.push({ mesh: dot, v: vi, step: k, shrink: shrink });
       });
+
+      // The pen, as distinct from what it has written. The dots are the
+      // record -- one at every vertex the walk has reached, planted at the
+      // moment it arrives -- and this is the tip, riding the edge that is
+      // currently being drawn.
+      //
+      // Carrying a dot along the edge instead would have cost the record its
+      // first entry: the dot at the walk's own starting vertex would leave
+      // with the first edge and nothing would return to that vertex until
+      // the cycle closed, leaving the one vertex the reader is watching bare
+      // for the whole trace. A separate pen keeps every dot where it means
+      // something and still shows the hand moving.
+      //
+      // One per cap, like the tubes and the dots, because both caps carry
+      // the whole cycle on their rim and pull apart with it.
+      var runner = new THREE.Mesh(sphereGeo, dotMat);
+      container.add(runner);
+      seamRunners.push({ mesh: runner, shrink: shrink });
 
       // The yin-yang inlay: on each of the strip's two end faces, a scaled
       // copy of that face in the OTHER cap's colour, lifted clear of the
@@ -866,7 +885,8 @@
 
     currentGroups = groups;
     currentDirections = directions;
-    currentSeam = { edges: seamEdges, dots: seamDots, steps: data.cycle.length,
+    currentSeam = { edges: seamEdges, dots: seamDots, runners: seamRunners,
+                    steps: data.cycle.length, verts: data.cycle,
                     path: data.cycle.map(function(vi){ return positions[vi].clone(); }) };
     currentFaces = { buffers: faceBuffers, inlays: inlays };
     traceT = 0;
@@ -1014,6 +1034,23 @@
       d.mesh.visible = (r > 0 && (!tracing || traceT >= d.step));
       d.mesh.position.copy(P[d.v]);
       d.mesh.scale.setScalar(dotScale * d.shrink);
+    });
+
+    // Where the pen is: the same place the tube's tip is, for the same
+    // reason it is the same number -- edge i is being drawn over traceT in
+    // [i, i + 1], so the whole part picks the edge and the fraction is how
+    // far along it. It is gone before the loop closes and during the pause
+    // that follows: by then there is no edge being drawn, and a pen with
+    // nothing to draw would sit on a dot pretending to be one.
+    var n = currentSeam.steps;
+    var penOn = (r > 0 && tracing && traceT > 0 && traceT < n);
+    currentSeam.runners.forEach(function(run){
+      run.mesh.visible = penOn;
+      if (!penOn) return;
+      var i = Math.floor(traceT) % n;
+      var a = P[currentSeam.verts[i]], b = P[currentSeam.verts[(i + 1) % n]];
+      run.mesh.position.copy(a).lerp(b, traceT - Math.floor(traceT));
+      run.mesh.scale.setScalar(dotScale * run.shrink);
     });
     if (currentMorph && currentMorph.wire){
       var arr = currentMorph.wire.geometry.getAttribute("position");
