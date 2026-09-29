@@ -489,8 +489,38 @@
   var currentMorph = null; // the flattening: where every vertex starts and ends
   var morphT = 0;          // 0 = the solid, 1 = the Schlegel diagram
   var morphTarget = 0;     // what it is heading for
-  var MORPH_SECONDS = 3.2;
+  var MORPH_SECONDS = 3.8;
+
+  // The flattening happens in stages that do not overlap, and this is the
+  // whole timetable. Every beat() below quotes a pair from it.
+  //
+  //   0.00 - 0.28  turn      the nearest face swings to face the camera
+  //   0.28 - 0.38  hold      the solid sits still, that face square on
+  //   0.38 - 0.56  open      that face alone fades; nothing else moves
+  //   0.56 - 0.60  hold
+  //   0.60 - 1.00  explode   the vertices fly out to the diagram
+  //   0.74 - 0.99  clear     the rest of the surface goes
+  //
+  // They used to overlap: the face began fading at 0.06, while the camera
+  // was still turning. When the reader was already looking near enough
+  // square at a face there was no turn to speak of, so the face they were
+  // about to look THROUGH disappeared before they had seen it -- the
+  // animation skipped its own first sentence. The holds are there so each
+  // stage is read as having finished before the next one starts.
+  var TURN = [0.0, 0.28], OPEN = [0.38, 0.56], BURST = [0.60, 1.0];
   var morphHome = null;    // the camera to give back when it unflattens
+  var CLOSE_RATE = 12;     // of the remaining gap, per second
+  var CLOSE_FLOOR = 1.2;   // and never slower than this, so it lands
+  var sepHome = 0;         // the gap to give back when it unflattens
+
+  // Most of what is left, every frame, but never less than a walking pace.
+  // Used in both directions: the caps close into the flattening and open
+  // back out of it on the same curve.
+  function easeGap(from, to, dt){
+    var gap = Math.abs(to - from);
+    var step = Math.min(gap, Math.max(gap * CLOSE_RATE, CLOSE_FLOOR) * dt);
+    return from + (to > from ? step : -step);
+  }
   var _d = new THREE.Vector3();
   var _a = new THREE.Vector3();
   var seamWidth = 1.0;     // the slider
@@ -506,7 +536,6 @@
     if (currentGroups){
       currentGroups.forEach(function(g){ scene.remove(g); });
     }
-    if (currentMorph && currentMorph.wire) scene.remove(currentMorph.wire);
     currentGroups = null;
     currentDirections = null;
     currentMorph = null;
@@ -627,6 +656,8 @@
     var groups = [];
     var seamEdges = [];
     var seamDots = [];
+    var seamRunners = [];
+    var wires = [];
     var faceBuffers = [];
     var inlays = [];
     var faceMats = [];
@@ -665,12 +696,25 @@
         viewMats.push(viewMat);
         mats = [mat, viewMat];
         var total = posArrays[g].length / 3;
+        // The groups do NOT have to run in address order, and this one must
+        // not: three.js draws them in the order they are added, so the face
+        // we look through is added LAST and is therefore the last thing this
+        // cap draws. It has to be, because a fading face stops writing depth
+        // (see setFade) and so no longer keeps anything out of the pixels it
+        // covers -- drawn any earlier, the surface behind it simply paints
+        // over it at full strength and the "fade" is a cut.
         if (viewSpan.start > 0) geo.addGroup(0, viewSpan.start, 0);
-        geo.addGroup(viewSpan.start, viewSpan.count, 1);
         var after = total - (viewSpan.start + viewSpan.count);
         if (after > 0) geo.addGroup(viewSpan.start + viewSpan.count, after, 0);
+        geo.addGroup(viewSpan.start, viewSpan.count, 1);
       }
-      container.add(new THREE.Mesh(geo, mats));
+      var capMesh = new THREE.Mesh(geo, mats);
+      // Same argument one level up: the OTHER cap is a separate object, and
+      // two objects centred on the origin sort against each other by nothing
+      // in particular. The cap holding that face goes last of the two, so
+      // the whole interior is on the screen before the face blends over it.
+      if (viewSpan) capMesh.renderOrder = 1;
+      container.add(capMesh);
       faceBuffers.push({ attr: geo.getAttribute("color"), spans: faceSpans[g], cap: g,
                          geo: geo, pos: geo.getAttribute("position"),
                          idx: idxArrays[g] });
@@ -709,6 +753,50 @@
         seamDots.push({ mesh: dot, v: vi, step: k, shrink: shrink });
       });
 
+      // The pen, as distinct from what it has written. The dots are the
+      // record -- one at every vertex the walk has reached, planted at the
+      // moment it arrives -- and this is the tip, riding the edge that is
+      // currently being drawn.
+      //
+      // Carrying a dot along the edge instead would have cost the record its
+      // first entry: the dot at the walk's own starting vertex would leave
+      // with the first edge and nothing would return to that vertex until
+      // the cycle closed, leaving the one vertex the reader is watching bare
+      // for the whole trace. A separate pen keeps every dot where it means
+      // something and still shows the hand moving.
+      //
+      // One per cap, like the tubes and the dots, because both caps carry
+      // the whole cycle on their rim and pull apart with it.
+      var runner = new THREE.Mesh(sphereGeo, dotMat);
+      container.add(runner);
+      seamRunners.push({ mesh: runner, shrink: shrink });
+
+      // This cap's edges, as lines. It belongs to the CAP, not to the scene:
+      // a single wireframe of the whole solid cannot be in two places, so
+      // when the caps were pulled apart it stayed behind, a ghost of the
+      // solid hanging in the gap where the split had been.
+      //
+      // Each cap draws the edges of its own faces, so an edge the cycle cut
+      // is drawn by both -- which is the same thing the tubes and the dots
+      // do, and the same claim: both caps keep the whole cycle on their rim.
+      var capPairs = [];
+      var seenCapEdge = {};
+      data.faces.forEach(function(f, fi){
+        if (compOf[fi] !== g) return;
+        for (var k = 0; k < f.length; k++){
+          var a2 = f[k], b2 = f[(k + 1) % f.length];
+          var key2 = Math.min(a2, b2) + "-" + Math.max(a2, b2);
+          if (!seenCapEdge[key2]){ seenCapEdge[key2] = true; capPairs.push([a2, b2]); }
+        }
+      });
+      var wireGeo = new THREE.BufferGeometry();
+      wireGeo.setAttribute("position", new THREE.Float32BufferAttribute(
+        new Float32Array(capPairs.length * 6), 3));
+      var capWire = new THREE.LineSegments(wireGeo, new THREE.LineBasicMaterial({
+        color: 0x9aa3b4, transparent: true, opacity: 0 }));
+      container.add(capWire);
+      wires.push({ mesh: capWire, pairs: capPairs });
+
       // The yin-yang inlay: on each of the strip's two end faces, a scaled
       // copy of that face in the OTHER cap's colour, lifted clear of the
       // surface so it cannot z-fight. Same 0.40 as the printed part.
@@ -738,7 +826,8 @@
           }));
           container.add(im);
           im.material.transparent = true;
-          inlays.push({ mesh: im, paintAt: span.paintAt, face: span.face });
+          inlays.push({ mesh: im, paintAt: span.paintAt, face: span.face,
+                        traceU: 1, morphU: 1 });
         });
       }
 
@@ -806,26 +895,10 @@
 
     // Every edge of the solid, as a line. In the solid it is a faint
     // scaffold under the faces; in the diagram it is the whole drawing.
-    var pairs = [];
-    var seenEdge = {};
-    data.faces.forEach(function(f){
-      for (var k = 0; k < f.length; k++){
-        var a2 = f[k], b2 = f[(k + 1) % f.length];
-        var key2 = Math.min(a2, b2) + "-" + Math.max(a2, b2);
-        if (!seenEdge[key2]){ seenEdge[key2] = true; pairs.push([a2, b2]); }
-      }
-    });
-    var wireGeo = new THREE.BufferGeometry();
-    wireGeo.setAttribute("position", new THREE.Float32BufferAttribute(
-      new Float32Array(pairs.length * 6), 3));
-    var wire = new THREE.LineSegments(wireGeo, new THREE.LineBasicMaterial({
-      color: 0x9aa3b4, transparent: true, opacity: 0 }));
-    scene.add(wire);
-
     currentMorph = {
       base: positions.map(function(p){ return p.clone(); }),
       flat: flat || positions.map(function(p){ return p.clone(); }),
-      normal: viewNormal, span: faceSpan, wire: wire, pairs: pairs,
+      normal: viewNormal, span: faceSpan, wires: wires,
       centre: (lay ? c0.clone() : new THREE.Vector3()),
       up: (lay ? vax.clone() : new THREE.Vector3(0, 0, 1)),
       faceMats: faceMats, viewMats: viewMats, viewFace: viewFace,
@@ -834,7 +907,8 @@
 
     currentGroups = groups;
     currentDirections = directions;
-    currentSeam = { edges: seamEdges, dots: seamDots, steps: data.cycle.length,
+    currentSeam = { edges: seamEdges, dots: seamDots, runners: seamRunners,
+                    steps: data.cycle.length, verts: data.cycle,
                     path: data.cycle.map(function(vi){ return positions[vi].clone(); }) };
     currentFaces = { buffers: faceBuffers, inlays: inlays };
     traceT = 0;
@@ -961,7 +1035,7 @@
     applyFaceShape();
     // Thinner as it flattens: the diagram is one face wide, so the camera
     // ends up close, and a tube sized for the whole solid reads as a girder.
-    var shrinkSeam = 1 - 0.55 * beat(morphT, 0.35, 1.0);
+    var shrinkSeam = 1 - 0.55 * beat(morphT, 0.04, 0.40);   // with the turn
     var r = SEAM_R * seamWidth * shrinkSeam;
     var dotScale = Math.max(1, (r * 1.45) / DOT_R) * shrinkSeam;
     var P = livePositions();
@@ -983,13 +1057,32 @@
       d.mesh.position.copy(P[d.v]);
       d.mesh.scale.setScalar(dotScale * d.shrink);
     });
-    if (currentMorph && currentMorph.wire){
-      var arr = currentMorph.wire.geometry.getAttribute("position");
-      currentMorph.pairs.forEach(function(pr, i){
-        arr.setXYZ(i * 2, P[pr[0]].x, P[pr[0]].y, P[pr[0]].z);
-        arr.setXYZ(i * 2 + 1, P[pr[1]].x, P[pr[1]].y, P[pr[1]].z);
+
+    // Where the pen is: the same place the tube's tip is, for the same
+    // reason it is the same number -- edge i is being drawn over traceT in
+    // [i, i + 1], so the whole part picks the edge and the fraction is how
+    // far along it. It is gone before the loop closes and during the pause
+    // that follows: by then there is no edge being drawn, and a pen with
+    // nothing to draw would sit on a dot pretending to be one.
+    var n = currentSeam.steps;
+    var penOn = (r > 0 && tracing && traceT > 0 && traceT < n);
+    currentSeam.runners.forEach(function(run){
+      run.mesh.visible = penOn;
+      if (!penOn) return;
+      var i = Math.floor(traceT) % n;
+      var a = P[currentSeam.verts[i]], b = P[currentSeam.verts[(i + 1) % n]];
+      run.mesh.position.copy(a).lerp(b, traceT - Math.floor(traceT));
+      run.mesh.scale.setScalar(dotScale * run.shrink);
+    });
+    if (currentMorph && currentMorph.wires){
+      currentMorph.wires.forEach(function(w){
+        var arr = w.mesh.geometry.getAttribute("position");
+        w.pairs.forEach(function(pr, i){
+          arr.setXYZ(i * 2, P[pr[0]].x, P[pr[0]].y, P[pr[0]].z);
+          arr.setXYZ(i * 2 + 1, P[pr[1]].x, P[pr[1]].y, P[pr[1]].z);
+        });
+        arr.needsUpdate = true;
       });
-      arr.needsUpdate = true;
     }
   }
 
@@ -1037,7 +1130,7 @@
   function livePositions(){
     if (!currentMorph) return [];
     if (morphT <= 0) return currentMorph.base;
-    var e = beat(morphT, 0.45, 1.0);
+    var e = beat(morphT, BURST[0], BURST[1]);
     return currentMorph.base.map(function(p, i){
       return p.clone().lerp(currentMorph.flat[i], e);
     });
@@ -1045,14 +1138,50 @@
 
   // Which faces are painted, and which are still waiting for the seam.
   // Called from the same places applySeam is, for the same reason.
-  var _c = new THREE.Color();
+  var _c = new THREE.Color(), _cap = new THREE.Color();
+  // How far the edge that paints this face has been drawn, from 0 to 1.
+  //
+  // It is the SAME number the tube is being grown by, not a second clock
+  // running alongside it: an edge k is stepped at k and paints its faces at
+  // k + 1, so subtracting one from the face's step recovers the growth of
+  // the very edge doing the painting. The colour front and the tip of the
+  // tube are therefore the same event, and cannot drift apart.
+  //
+  // The colour does not start with the edge, though. Reading the same 0-to-1
+  // straight off meant that by the time you had worked out which edge was
+  // being drawn, its faces were already most of the way to their colour, and
+  // the colouring stopped looking like a consequence of the cut. So the
+  // colour keeps the finish line and gives up the start: nothing for the
+  // first PAINT_LAG of the edge, then the whole change compressed into what
+  // is left. Later, and faster, landing on the same instant.
+  //
+  // Squared rather than straight, so the delay has no edge of its own: a
+  // linear ramp beginning part way along an edge starts at full speed, which
+  // is a second event to notice. This one starts at a standstill and arrives
+  // at full speed exactly as the edge closes, which is the moment that
+  // actually means something.
+  var PAINT_LAG = 0.5;      // of the edge, before any colour moves at all
+  function cut(paintAt){
+    if (!tracing) return 1;
+    var x = Math.min(1, Math.max(0, traceT - (paintAt - 1)));
+    var t = Math.max(0, (x - PAINT_LAG) / (1 - PAINT_LAG));
+    return t * t;
+  }
+
   function applyFaces(){
     if (!currentFaces) return;
     var caps = PALETTES[paletteName].caps;
     currentFaces.buffers.forEach(function(buf){
       var arr = buf.attr.array;
+      _cap.setHex(caps[buf.cap]);
       buf.spans.forEach(function(span){
-        _c.setHex((tracing && traceT < span.paintAt) ? NEUTRAL : caps[buf.cap]);
+        // Grey until the seam reaches it, its own colour once the seam has
+        // passed, and on the way between the two while the seam is actually
+        // crossing it -- the face takes its side as it is being cut, rather
+        // than at the instant the cut finishes. The claim is that the cycle
+        // SPLITS the solid, and a colour that arrives with the blade says
+        // that; one that snaps on afterwards only reports it.
+        _c.setHex(NEUTRAL).lerp(_cap, cut(span.paintAt));
         for (var i = span.start; i < span.start + span.count; i++){
           arr[i * 3] = _c.r; arr[i * 3 + 1] = _c.g; arr[i * 3 + 2] = _c.b;
         }
@@ -1060,8 +1189,17 @@
       buf.attr.needsUpdate = true;
     });
     currentFaces.inlays.forEach(function(inl){
-      inl.mesh.visible = !(tracing && traceT < inl.paintAt);
+      inl.traceU = cut(inl.paintAt);
+      inlayFade(inl);
     });
+  }
+
+  // An inlay is faded by two things that do not know about each other -- the
+  // seam arriving, and the flattening taking the solid away -- so each keeps
+  // its own factor and the material gets the product. Writing the material
+  // directly from either one let whichever ran second erase the other.
+  function inlayFade(inl){
+    setFade(inl.mesh.material, inl.traceU * inl.morphU, false);
   }
 
   function applyPalette(){
@@ -1119,10 +1257,17 @@
   var sepSlider = document.getElementById("sepSlider");
   var sepValue = document.getElementById("sepValue");
   sepSlider.addEventListener("input", function(){
-    var v = parseFloat(sepSlider.value);
+    showSeparation(parseFloat(sepSlider.value));
+  });
+
+  // The caps and the control that reports them, together. The page moves
+  // the caps itself when it closes them for the flattening, and a slider
+  // left reading 1.6 over a closed solid is a lie.
+  function showSeparation(v){
+    sepSlider.value = v;
     sepValue.textContent = v.toFixed(2);
     applySeparation(v);
-  });
+  }
 
   var seamSlider = document.getElementById("seamSlider");
   var seamValue = document.getElementById("seamValue");
@@ -1162,10 +1307,13 @@
     if (!currentMorph || !currentMorph.canFlatten){ flatten.checked = false; return; }
     morphTarget = flatten.checked ? 1 : 0;
     if (flatten.checked){
-      sepSlider.value = 0; sepValue.textContent = "0.00"; applySeparation(0);
       autoRotate.checked = false; controls.autoRotate = false;
       followSeam.checked = false; following = false;
       captureHome();
+      // The caps close on their own clock before the morph starts, in the
+      // animation loop. Slamming them shut here threw away the one moment
+      // that showed the two halves going back together.
+      applyMorph();          // the controls are the page's now, not yours
     }
   });
 
@@ -1181,6 +1329,11 @@
   // diagram's up -- which is what broke the orbit after a switch.
   function captureHome(){
     if (morphHome) return;
+    // The gap is part of where the reader was, the same as the camera. It
+    // is kept apart from morphHome only because the camera lands in one
+    // step, on the frame morphT reaches 0, while the caps are still opening
+    // for a while after that.
+    sepHome = currentSeparation;
     morphHome = {
       dir: camera.position.clone().sub(controls.target).normalize(),
       dist: camera.position.distanceTo(controls.target),
@@ -1195,23 +1348,35 @@
   });
   controls.autoRotateSpeed = 1.6;
 
-  // Fading a face is not just its opacity: it has to stop WRITING DEPTH as
-  // well, or it goes black rather than clear.
+  // Fading a face is its opacity and, for one face only, its depth writing.
   //
   // A half-transparent face still fills the depth buffer, so everything
   // behind it fails the test and is never drawn -- and what the reader sees
   // is the face's colour blended against the page background, which is very
-  // nearly black. The face we look through appeared to darken into a hole
-  // instead of opening one, and the inside of the solid, the whole reason
-  // for opening it, stayed hidden until the face had gone entirely.
+  // nearly black. That is why the face we look through stops writing depth
+  // as it fades: it darkened into a hole instead of opening one, and the
+  // inside of the solid, the whole reason for opening it, stayed hidden
+  // until the face had gone entirely.
   //
-  // Depth writing stays on while a face is fully opaque, because that is
-  // what draws a solid correctly. It goes off the moment the face is
-  // see-through, which is exactly when it has no business hiding anything.
-  function setFade(m, o){
+  // Only that face, though, and only because it is drawn last. Giving every
+  // face the same treatment took the depth buffer away from the whole
+  // surface at once, and with it the only thing deciding which face is in
+  // front: what was left was the order the triangles happen to sit in the
+  // buffer, and the cap holding the view face draws second. At the frame the
+  // general fade began, the two near teal faces were overpainted by the red
+  // ones BEHIND them -- 78372 pixels moving more than 60 levels in one step,
+  // against 13-16 thousand in the steps either side. A fade that swaps two
+  // faces over is not a fade.
+  //
+  // So `overlay` is a promise about draw order, not a preference: pass true
+  // only for a material drawn after everything it should be blending over,
+  // which here is the view face and nothing else. Everything else keeps its
+  // depth writing and therefore keeps its place, and fades without ever
+  // changing what is in front of what.
+  function setFade(m, o, overlay){
     m.opacity = o;
     m.visible = o > 0.01;
-    m.depthWrite = o > 0.999;
+    m.depthWrite = overlay ? o > 0.999 : true;
   }
 
   // One place decides what the flattening looks like at a given moment, the
@@ -1221,9 +1386,10 @@
     // Two clocks for the surface, not one.
     //
     // The face we look THROUGH goes first, and goes completely: that hole is
-    // the whole difference between a solid and a Schlegel diagram, and it
-    // opens while the camera is still turning face-on, so the window arrives
-    // with the view.
+    // the whole difference between a solid and a Schlegel diagram. It opens
+    // in a stage of its own, after the turn has finished and before anything
+    // moves, so the reader sees WHICH face is being opened before it is not
+    // there any more.
     //
     // The rest of the surface stays up almost the whole way. A bare
     // wireframe of a convex solid seen face-on is a tangle -- every far edge
@@ -1238,21 +1404,27 @@
     // their region without overlapping: there is nothing at the end for a
     // filled face to fight for the same plane, once the face being looked
     // through -- the one that became the outer boundary -- has gone.
-    var viewFade = 1 - beat(morphT, 0.06, 0.30);
-    var fade = 1 - beat(morphT, 0.66, 0.99);
-    currentMorph.faceMats.forEach(function(m){ setFade(m, fade); });
-    currentMorph.viewMats.forEach(function(m){ setFade(m, Math.min(fade, viewFade)); });
+    var viewFade = 1 - beat(morphT, OPEN[0], OPEN[1]);
+    var fade = 1 - beat(morphT, 0.74, 0.99);
+    currentMorph.faceMats.forEach(function(m){ setFade(m, fade, false); });
+    currentMorph.viewMats.forEach(function(m){ setFade(m, Math.min(fade, viewFade), true); });
     // The inlays go with the turn, not with the surface. They are proud of
     // the faces rather than part of them, so a fade that tracks the face
     // under each one leaves them floating a moment either way, and they are
     // a fact about the PRINTED object -- there is nothing for them to mean
     // in a flat graph. Out early, while the solid is still rotating, and the
     // reader never has to watch them try to follow the explosion.
-    currentMorph.inlays.forEach(function(inl){ setFade(inl.mesh.material, viewFade); });
-    currentMorph.wire.material.opacity = 0.25 + 0.75 * beat(morphT, 0.45, 0.88);
-    currentMorph.wire.visible = true;
+    currentMorph.inlays.forEach(function(inl){
+      inl.morphU = viewFade;
+      inlayFade(inl);
+    });
+    var wireOp = 0.25 + 0.75 * beat(morphT, 0.58, 0.92);
+    currentMorph.wires.forEach(function(w){
+      w.mesh.material.opacity = wireOp;
+      w.mesh.visible = true;
+    });
 
-    if (morphT <= 0 && morphHome){
+    if (morphT <= 0 && morphTarget <= 0 && morphHome){
       // Land exactly where we started. Anything short of this leaves the
       // orbit somewhere the controls did not put it, and the next drag
       // tumbles from a camera whose up vector is still half way to the
@@ -1265,7 +1437,7 @@
       morphHome = null;
     }
     if (morphT > 0 && morphHome && currentMorph.normal){
-      var e = beat(morphT, 0.0, 0.55);
+      var e = beat(morphT, TURN[0], TURN[1]);
       // The diagram is not centred where the solid is: it lies in the plane
       // of the face it is seen through, a face's inradius out from the
       // middle. Aiming at the origin the whole way leaves it half off the
@@ -1286,7 +1458,9 @@
     // caps to pull apart once the solid is a flat drawing, but taking the
     // rows out of the sidebar reflowed every row below them, so the panel
     // jumped and everything the reader had their eye on moved.
-    var dead = morphT > 0.5;
+    // Dead while the page is driving them: from the moment the box is
+    // ticked, and on the way back until the gap it is restoring has landed.
+    var dead = morphTarget > 0 || morphT > 0.5 || currentSeparation < sepHome - 1e-4;
     [sepSlider, autoRotate, followSeam].forEach(function(el){
       el.disabled = dead;
       var row = el.closest(".field");
@@ -1315,12 +1489,54 @@
       applySeam();
       applyFaces();
     }
-    if (morphT !== morphTarget){
+    // The caps and the flattening run TOGETHER, and the flattening waits.
+    //
+    // Closing first and turning afterwards made two short animations played
+    // end to end where one longer one would do; they are independent -- the
+    // gap is the caps' business and the turn is the camera's -- so they
+    // happen at once and the morph simply refuses to leave the turn until
+    // the caps have met. In practice the turn is the longer of the two at
+    // every separation, so the wait costs nothing and only exists so the
+    // rule does not depend on that staying true.
+    //
+    // The gap decays rather than slides: each frame takes a fixed FRACTION
+    // of what is left, which makes the time logarithmic in how far it had to
+    // go -- 2.5 shuts in about a third of a second, 0.5 in about a fifth,
+    // and 0 costs no frames at all. Constant speed would have been
+    // proportional instead, a long crawl from wide open; constant time would
+    // have spent as long on a hair's gap as on the full one. A decaying gap
+    // never quite arrives, so CLOSE_FLOOR puts a floor under the step and it
+    // walks the last stretch in: a few hundredths of the range, about five
+    // frames, which is why the deceleration reads as a settle.
+    //
+    // The same easing runs backwards on the way out of the diagram, because
+    // the separation is given back the way the camera is -- see sepHome.
+    var sepMoved = false;
+    if (morphTarget > 0 && currentSeparation > 0){
+      showSeparation(easeGap(currentSeparation, 0, dt));
+      sepMoved = true;
+    } else if (morphTarget <= 0 && morphT <= TURN[1] && currentSeparation < sepHome){
+      showSeparation(easeGap(currentSeparation, sepHome, dt));
+      sepMoved = true;
+    }
+    if (sepHome > 0 && morphTarget <= 0 && morphT <= 0 && currentSeparation >= sepHome){
+      sepHome = 0;
+      sepMoved = true;       // one more pass, to hand the slider back
+    }
+
+    // Never backwards: the clamp holds the flattening at the end of the turn
+    // while the caps close, it does not drag it back there.
+    var goal = morphTarget;
+    if (morphTarget > 0 && currentSeparation > 0){
+      goal = Math.min(morphTarget, Math.max(TURN[1], morphT));
+    }
+    if (morphT !== goal){
       var step = dt / MORPH_SECONDS;
-      morphT += Math.min(step, Math.abs(morphTarget - morphT)) *
-                (morphTarget > morphT ? 1 : -1);
+      morphT += Math.min(step, Math.abs(goal - morphT)) * (goal > morphT ? 1 : -1);
       applyMorph();
       applySeam();
+    } else if (sepMoved){
+      applyMorph();          // the controls' state depends on the gap too
     }
     if (following && currentSeam){
       camT = tracing ? traceT : camT + dt * TRACE_SPEED;
