@@ -509,6 +509,8 @@
   // stage is read as having finished before the next one starts.
   var TURN = [0.0, 0.28], OPEN = [0.38, 0.56], BURST = [0.60, 1.0];
   var morphHome = null;    // the camera to give back when it unflattens
+  var CLOSE_RATE = 12;     // of the remaining gap, per second
+  var CLOSE_FLOOR = 1.2;   // and never slower than this, so it lands
   var _d = new THREE.Vector3();
   var _a = new THREE.Vector3();
   var seamWidth = 1.0;     // the slider
@@ -1245,10 +1247,17 @@
   var sepSlider = document.getElementById("sepSlider");
   var sepValue = document.getElementById("sepValue");
   sepSlider.addEventListener("input", function(){
-    var v = parseFloat(sepSlider.value);
+    showSeparation(parseFloat(sepSlider.value));
+  });
+
+  // The caps and the control that reports them, together. The page moves
+  // the caps itself when it closes them for the flattening, and a slider
+  // left reading 1.6 over a closed solid is a lie.
+  function showSeparation(v){
+    sepSlider.value = v;
     sepValue.textContent = v.toFixed(2);
     applySeparation(v);
-  });
+  }
 
   var seamSlider = document.getElementById("seamSlider");
   var seamValue = document.getElementById("seamValue");
@@ -1288,10 +1297,13 @@
     if (!currentMorph || !currentMorph.canFlatten){ flatten.checked = false; return; }
     morphTarget = flatten.checked ? 1 : 0;
     if (flatten.checked){
-      sepSlider.value = 0; sepValue.textContent = "0.00"; applySeparation(0);
       autoRotate.checked = false; controls.autoRotate = false;
       followSeam.checked = false; following = false;
       captureHome();
+      // The caps close on their own clock before the morph starts, in the
+      // animation loop. Slamming them shut here threw away the one moment
+      // that showed the two halves going back together.
+      applyMorph();          // the controls are the page's now, not yours
     }
   });
 
@@ -1397,7 +1409,7 @@
       w.mesh.visible = true;
     });
 
-    if (morphT <= 0 && morphHome){
+    if (morphT <= 0 && morphTarget <= 0 && morphHome){
       // Land exactly where we started. Anything short of this leaves the
       // orbit somewhere the controls did not put it, and the next drag
       // tumbles from a camera whose up vector is still half way to the
@@ -1431,7 +1443,7 @@
     // caps to pull apart once the solid is a flat drawing, but taking the
     // rows out of the sidebar reflowed every row below them, so the panel
     // jumped and everything the reader had their eye on moved.
-    var dead = morphT > 0.5;
+    var dead = morphTarget > 0 || morphT > 0.5;
     [sepSlider, autoRotate, followSeam].forEach(function(el){
       el.disabled = dead;
       var row = el.closest(".field");
@@ -1460,7 +1472,27 @@
       applySeam();
       applyFaces();
     }
-    if (morphT !== morphTarget){
+    // Close the caps before the flattening starts, if they are open.
+    //
+    // A stage that costs nothing when it is not needed: at separation 0 the
+    // condition is false on the first frame and the morph begins at once,
+    // and the wider the gap the longer it takes -- but only just. Each frame
+    // takes a fixed FRACTION of what is left, so the gap decays rather than
+    // slides, and the time to close is logarithmic in how far open it was:
+    // 2.5 shuts in about a third of a second, 0.5 in about a fifth. Constant
+    // speed would have been proportional instead, a slow crawl from wide
+    // open; constant time would have spent the same on a hair's gap as on
+    // the full one.
+    //
+    // A decaying gap never actually reaches zero, though, so there is a
+    // floor under the step: below CLOSE_FLOOR a second it stops decaying and
+    // simply walks in. That last stretch is the final few hundredths of the
+    // range and about five frames, which is why the deceleration reads as a
+    // settle rather than a crawl.
+    if (morphTarget > 0 && morphT === 0 && currentSeparation > 0){
+      showSeparation(Math.max(0, currentSeparation -
+        Math.max(currentSeparation * CLOSE_RATE, CLOSE_FLOOR) * dt));
+    } else if (morphT !== morphTarget){
       var step = dt / MORPH_SECONDS;
       morphT += Math.min(step, Math.abs(morphTarget - morphT)) *
                 (morphTarget > morphT ? 1 : -1);
