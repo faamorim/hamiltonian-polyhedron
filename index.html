@@ -683,12 +683,25 @@
         viewMats.push(viewMat);
         mats = [mat, viewMat];
         var total = posArrays[g].length / 3;
+        // The groups do NOT have to run in address order, and this one must
+        // not: three.js draws them in the order they are added, so the face
+        // we look through is added LAST and is therefore the last thing this
+        // cap draws. It has to be, because a fading face stops writing depth
+        // (see setFade) and so no longer keeps anything out of the pixels it
+        // covers -- drawn any earlier, the surface behind it simply paints
+        // over it at full strength and the "fade" is a cut.
         if (viewSpan.start > 0) geo.addGroup(0, viewSpan.start, 0);
-        geo.addGroup(viewSpan.start, viewSpan.count, 1);
         var after = total - (viewSpan.start + viewSpan.count);
         if (after > 0) geo.addGroup(viewSpan.start + viewSpan.count, after, 0);
+        geo.addGroup(viewSpan.start, viewSpan.count, 1);
       }
-      container.add(new THREE.Mesh(geo, mats));
+      var capMesh = new THREE.Mesh(geo, mats);
+      // Same argument one level up: the OTHER cap is a separate object, and
+      // two objects centred on the origin sort against each other by nothing
+      // in particular. The cap holding that face goes last of the two, so
+      // the whole interior is on the screen before the face blends over it.
+      if (viewSpan) capMesh.renderOrder = 1;
+      container.add(capMesh);
       faceBuffers.push({ attr: geo.getAttribute("color"), spans: faceSpans[g], cap: g,
                          geo: geo, pos: geo.getAttribute("position"),
                          idx: idxArrays[g] });
