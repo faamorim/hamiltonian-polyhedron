@@ -865,7 +865,13 @@
       geo.computeVertexNormals();
       var mat = new THREE.MeshStandardMaterial({
         vertexColors: true, side: THREE.DoubleSide,
-        flatShading: true, roughness: 0.55, metalness: 0.05
+        flatShading: true, roughness: 0.55, metalness: 0.05,
+        // The wireframe shares this surface's vertices exactly, so for the
+        // stretch of the morph where both are on screen they are at the same
+        // depth and neither wins. Nudging the faces a hair further away
+        // settles it in the lines' favour, which is the way round that draws
+        // an edge rather than a dashed one.
+        polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1
       });
       mat.transparent = true;
       faceMats.push(mat);
@@ -1544,10 +1550,18 @@
       inl.morphU = viewFade;
       inlayFade(inl);
     });
-    var wireOp = 0.25 + 0.75 * beat(morphT, 0.58, 0.92);
+    // Nothing at rest. It used to sit at a quarter opacity on the closed
+    // solid, as a "faint scaffold under the faces" -- but it is not under
+    // them, it is exactly ON them, sharing their vertices. Two surfaces at
+    // the same depth means neither wins the depth test consistently, and
+    // what came out was a stippled light line along every crease. On the
+    // near-black palette that reads as a gap between two faces that are in
+    // fact touching. The solid already shows its creases through flat
+    // shading; the wireframe has a job only once the surface starts to go.
+    var wireOp = beat(morphT, 0.58, 0.92);
     currentMorph.wires.forEach(function(w){
       w.mesh.material.opacity = wireOp;
-      w.mesh.visible = true;
+      w.mesh.visible = wireOp > 0.004;
     });
 
     if (morphT <= 0 && morphTarget <= 0 && morphHome){
