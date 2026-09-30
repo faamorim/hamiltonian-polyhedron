@@ -330,9 +330,9 @@
   // graph -- which every convex polyhedron's is, by Steinitz -- the result
   // is crossing-free with every face convex. No geometry, only which vertex
   // touches which, so it cannot disagree with the data it is built from.
-  function tutteLayout(data){
+  function tutteLayout(data, viewFace){
     var n = data.vertices.length;
-    var vf = data.faces[0];
+    var vf = data.faces[viewFace];
     var adj = [];
     for (var i = 0; i < n; i++) adj.push([]);
     data.faces.forEach(function(f){
@@ -362,7 +362,79 @@
       }
       if (shift < 1e-9) break;
     }
-    return { viewFace: 0, pts: pts };
+    return { viewFace: viewFace, pts: pts };
+  }
+
+  // Everything the flattening needs for ONE chosen face: where each vertex
+  // lands, which way the camera must face, and how big the face is.
+  //
+  // This used to run once, when the solid was built, for face 0. It runs
+  // whenever the reader asks for the diagram now, because which face they
+  // are looking through is their business, not the solid's. Tutte's theorem
+  // is indifferent to which face is pinned -- any face of a 3-connected
+  // planar graph gives a crossing-free drawing -- so the only cost of asking
+  // later is the solve itself, which is a few thousand Gauss-Seidel sweeps
+  // over twenty vertices and takes no measurable time.
+  function planFlatten(data, positions, viewFace){
+    var lay = tutteLayout(data, viewFace);
+    if (!lay) return null;
+    var vf = data.faces[viewFace];
+    var c0 = new THREE.Vector3();
+    vf.forEach(function(vi){ c0.add(positions[vi]); });
+    c0.divideScalar(vf.length);
+    var nrm = new THREE.Vector3().subVectors(positions[vf[1]], positions[vf[0]])
+      .cross(new THREE.Vector3().subVectors(positions[vf[2]], positions[vf[0]]))
+      .normalize();
+    if (nrm.dot(c0) < 0) nrm.negate();
+    var uax = new THREE.Vector3().subVectors(positions[vf[0]], c0).normalize();
+    var vaxRaw = new THREE.Vector3().crossVectors(nrm, uax).normalize();
+    var vax = vaxRaw.clone();
+
+    // Fit the layout onto the real face rather than assuming it is already
+    // pointing the right way. The layout carries its own rotation (upright()
+    // turns it so a chosen vertex is up) and its own handedness, and
+    // dropping it into an arbitrary in-plane basis puts the outer face's
+    // vertices in the wrong slots -- which on the dodecahedron produced a
+    // diagram whose edges crossed, and on every solid made the vertices
+    // spin on their way out instead of travelling straight.
+    //
+    // So solve for the similarity that carries the layout's copy of this
+    // face onto the real one: as complex numbers, z -> c*z or c*conj(z),
+    // whichever fits better. Least squares over all of the face's vertices,
+    // so no single one decides it.
+    var lc = [0, 0];
+    vf.forEach(function(vi){ lc[0] += lay.pts[vi][0]; lc[1] += lay.pts[vi][1]; });
+    lc[0] /= vf.length; lc[1] /= vf.length;
+    var ar = 0, ai = 0, br = 0, bi = 0, ll = 0;
+    vf.forEach(function(vi){
+      var lx = lay.pts[vi][0] - lc[0], ly = lay.pts[vi][1] - lc[1];
+      var w = positions[vi].clone().sub(c0);
+      var qx = w.dot(uax), qy = w.dot(vaxRaw);
+      ar += lx * qx + ly * qy;  ai += lx * qy - ly * qx;   // conj(l) * q
+      br += lx * qx - ly * qy;  bi += lx * qy + ly * qx;   // l * q
+      ll += lx * lx + ly * ly;
+    });
+    var refl = Math.hypot(br, bi) > Math.hypot(ar, ai);
+    var cr = (refl ? br : ar) / (ll || 1), ci = (refl ? bi : ai) / (ll || 1);
+    var faceSpan = 0;
+    vf.forEach(function(vi){
+      faceSpan = Math.max(faceSpan, positions[vi].distanceTo(c0));
+    });
+    var flat = lay.pts.map(function(q){
+      var lx = q[0] - lc[0], ly = (refl ? -1 : 1) * (q[1] - lc[1]);
+      return c0.clone().addScaledVector(uax, cr * lx - ci * ly)
+                       .addScaledVector(vaxRaw, ci * lx + cr * ly);
+    });
+    // "up" has to be the fitted layout's up, not the basis vector it was
+    // fitted from, or the camera rolls to the wrong angle and the diagram
+    // arrives tilted.
+    var uy = refl ? [ci, -cr] : [-ci, cr];
+    vax = new THREE.Vector3().addScaledVector(uax, uy[0])
+                             .addScaledVector(vaxRaw, uy[1]).normalize();
+
+
+    return { flat: flat, normal: nrm, span: faceSpan, centre: c0, up: vax,
+             viewFace: viewFace };
   }
 
   // A Hamiltonian cycle removes itself from the face-adjacency (dual)
@@ -509,6 +581,9 @@
   // stage is read as having finished before the next one starts.
   var TURN = [0.0, 0.28], OPEN = [0.38, 0.56], BURST = [0.60, 1.0];
   var morphHome = null;    // the camera to give back when it unflattens
+  var TURN_DEG_PER_SEC = 120;   // how fast the solid swings to face the reader
+  var TURN_MIN = 0.28;          // seconds, so a tiny turn is still a turn
+  var TURN_MAX = 1.10;          // seconds, so a big one is not a chore
   var CLOSE_RATE = 12;     // of the remaining gap, per second
   var CLOSE_FLOOR = 1.2;   // and never slower than this, so it lands
   var sepHome = 0;         // the gap to give back when it unflattens
@@ -550,6 +625,121 @@
   // step rather than replaying three seconds of animation on every palette
   // toggle. A solid with no diagram to go to gives the view up and says so
   // by unticking.
+  // The face the reader is most nearly looking at, and everything that
+  // follows from choosing it.
+  //
+  // "Rotate as little as possible until a face faces the camera" is just the
+  // largest dot product between the viewing direction and the face normals.
+  // The solid sits at the origin, so the viewing direction is the camera's
+  // own position; controls.target wanders during the morph, which is exactly
+  // when we must not be asking.
+  function pickViewFace(){
+    var best = 0, bestDot = -Infinity;
+    _a.copy(camera.position).normalize();
+    currentMorph.normals.forEach(function(n, fi){
+      var d = n.dot(_a);
+      if (d > bestDot){ bestDot = d; best = fi; }
+    });
+    return { face: best, angle: Math.acos(Math.min(1, Math.max(-1, bestDot))) };
+  }
+
+  // Which face's triangles get the second material, in which cap. Both caps
+  // carry that material already, so this is only ever a rewrite of the
+  // geometry groups -- and of the order the two caps draw in, since the one
+  // holding the face has to go second.
+  function cutViewFace(face){
+    currentMorph.viewFace = face;
+    currentMorph.caps.forEach(function(c){
+      var span = null;
+      c.spans.forEach(function(sp){ if (sp.face === face) span = sp; });
+      c.geo.clearGroups();
+      if (!span){
+        c.geo.addGroup(0, c.total, 0);
+        c.mesh.renderOrder = 0;
+        return;
+      }
+      // The groups do NOT have to run in address order, and this one must
+      // not: three.js draws them in the order they are added, so the face we
+      // look through is added LAST and is the last thing this cap draws. It
+      // has to be, because a fading face stops writing depth (see setFade)
+      // and so no longer keeps anything out of the pixels it covers -- drawn
+      // any earlier, the surface behind it paints over it at full strength
+      // and the "fade" is a cut.
+      if (span.start > 0) c.geo.addGroup(0, span.start, 0);
+      var after = c.total - (span.start + span.count);
+      if (after > 0) c.geo.addGroup(span.start + span.count, after, 0);
+      c.geo.addGroup(span.start, span.count, 1);
+      // Same argument one level up: the other cap is a separate object, and
+      // two objects centred on the origin sort against each other by nothing
+      // in particular. The cap holding the face goes second, so the whole
+      // interior is on the screen before the face blends over it.
+      c.mesh.renderOrder = 1;
+    });
+  }
+
+  // Which way up to hold the diagram -- the nearest way, not the canonical one.
+  //
+  // Picking the nearest face stopped the solid swinging half a turn, but left
+  // the ROLL free: the layout has its own idea of up, and the solid span
+  // about the viewing axis to meet it, by as much as 180 degrees.
+  //
+  // It does not have to. Tutte pins the view face to a REGULAR polygon, so
+  // rolling the view by a multiple of 2*PI/k maps that polygon onto itself:
+  // the same picture with a different vertex of it on top, and every one of
+  // the k choices as valid a diagram as the others. Taking the one nearest
+  // to how the reader is holding it bounds the roll at 180/k degrees -- 60
+  // on a triangular face, 45 on a square, 36 on a pentagon -- instead of
+  // half a turn.
+  //
+  // Measured against the camera's up rather than the world's, because that
+  // is the vector the morph actually interpolates. If the face is being
+  // looked at from so nearly along that axis that the projection has no
+  // direction left, the camera's real screen-up stands in for it, and if
+  // that fails too the layout keeps its own up.
+  function nearestUp(plan){
+    var ref = camera.up.clone().projectOnPlane(plan.normal);
+    if (ref.lengthSq() < 1e-6){
+      camera.updateMatrixWorld();
+      ref.setFromMatrixColumn(camera.matrixWorld, 1).projectOnPlane(plan.normal);
+    }
+    if (ref.lengthSq() < 1e-6) return plan.up;
+    ref.normalize();
+
+    var k = currentMorph.data.faces[plan.viewFace].length;
+    var best = plan.up.clone(), bestDot = -Infinity;
+    for (var j = 0; j < k; j++){
+      var cand = plan.up.clone().applyAxisAngle(plan.normal, 2 * Math.PI * j / k);
+      var d = cand.dot(ref);
+      if (d > bestDot){ bestDot = d; best = cand; }
+    }
+    return best;
+  }
+
+  // Choose a face, work out the flattening for it, and cut it out of its cap.
+  // Cheap enough to do on a tick: the solve is a few thousand sweeps over
+  // twenty vertices.
+  function replan(){
+    if (!currentMorph) return;
+    var pick = pickViewFace();
+    var plan = planFlatten(currentMorph.data, currentMorph.base, pick.face);
+    if (!plan){ currentMorph.canFlatten = false; return; }
+    currentMorph.flat = plan.flat;
+    currentMorph.normal = plan.normal;
+    currentMorph.span = plan.span;
+    currentMorph.centre = plan.centre;
+    currentMorph.up = nearestUp(plan);
+    currentMorph.canFlatten = true;
+    // How long the turn should take, now that it is a real angle rather than
+    // whatever face 0 happened to be. Nearest-face picking never asks for
+    // more than about 70 degrees and usually far less, so a fixed slice of
+    // the morph would leave an 18-degree turn crawling through a whole
+    // second. Proportional, with a floor so a turn of almost nothing does
+    // not become a snap.
+    currentMorph.turnSeconds = Math.min(TURN_MAX, Math.max(TURN_MIN,
+      THREE.MathUtils.radToDeg(pick.angle) / TURN_DEG_PER_SEC));
+    cutViewFace(pick.face);
+  }
+
   function restoreFlatView(){
     if (!flatten.checked) return;
     if (!currentMorph || !currentMorph.canFlatten){
@@ -647,12 +837,10 @@
     // It is Tutte's embedding of THIS page's graph, not the worksheet's
     // drawing: see tutteLayout for why shipping the printed one here was
     // unsound. Same graph and same cycle, a different drawing of it.
-    var lay = tutteLayout(data);
-    // The face the diagram is seen through. It is built with a material of
-    // its own, because it has to be able to go while the rest of the
-    // surface stays: see applyMorph.
-    var viewFace = lay ? lay.viewFace : -1;
-
+    // Which face we look through is chosen when the reader asks for the
+    // diagram, not when the solid is built -- see planFlatten. The cap
+    // geometry only needs to know that ONE face will be singled out, and
+    // which one is re-cut later.
     var groups = [];
     var seamEdges = [];
     var seamDots = [];
@@ -662,6 +850,7 @@
     var inlays = [];
     var faceMats = [];
     var viewMats = [];
+    var capParts = [];
     for (var g = 0; g < 2; g++){
       var container = new THREE.Group();
 
@@ -676,45 +865,28 @@
       geo.computeVertexNormals();
       var mat = new THREE.MeshStandardMaterial({
         vertexColors: true, side: THREE.DoubleSide,
-        flatShading: true, roughness: 0.55, metalness: 0.05
+        flatShading: true, roughness: 0.55, metalness: 0.05,
+        // The wireframe shares this surface's vertices exactly, so for the
+        // stretch of the morph where both are on screen they are at the same
+        // depth and neither wins. Nudging the faces a hair further away
+        // settles it in the lines' favour, which is the way round that draws
+        // an edge rather than a dashed one.
+        polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1
       });
       mat.transparent = true;
       faceMats.push(mat);
 
-      // One mesh per cap, but the face we look through gets its own slice of
-      // it. A geometry group over that face's triangles, pointing at a second
-      // material, is all it takes -- the positions and the per-vertex colours
-      // stay one array, so the trace, the flattening and the paint are
-      // untouched.
-      var mats = mat;
-      var viewSpan = null;
-      faceSpans[g].forEach(function(span){
-        if (span.face === viewFace) viewSpan = span;
-      });
-      if (viewSpan){
-        var viewMat = mat.clone();
-        viewMats.push(viewMat);
-        mats = [mat, viewMat];
-        var total = posArrays[g].length / 3;
-        // The groups do NOT have to run in address order, and this one must
-        // not: three.js draws them in the order they are added, so the face
-        // we look through is added LAST and is therefore the last thing this
-        // cap draws. It has to be, because a fading face stops writing depth
-        // (see setFade) and so no longer keeps anything out of the pixels it
-        // covers -- drawn any earlier, the surface behind it simply paints
-        // over it at full strength and the "fade" is a cut.
-        if (viewSpan.start > 0) geo.addGroup(0, viewSpan.start, 0);
-        var after = total - (viewSpan.start + viewSpan.count);
-        if (after > 0) geo.addGroup(viewSpan.start + viewSpan.count, after, 0);
-        geo.addGroup(viewSpan.start, viewSpan.count, 1);
-      }
-      var capMesh = new THREE.Mesh(geo, mats);
-      // Same argument one level up: the OTHER cap is a separate object, and
-      // two objects centred on the origin sort against each other by nothing
-      // in particular. The cap holding that face goes last of the two, so
-      // the whole interior is on the screen before the face blends over it.
-      if (viewSpan) capMesh.renderOrder = 1;
+      // One mesh per cap, and every cap is built ABLE to single a face out,
+      // whether or not it currently holds the one we look through. Both carry
+      // the second material from the start, so re-cutting when the reader
+      // picks a different face -- possibly in the other cap -- is a matter of
+      // rewriting the geometry groups and nothing else. See cutViewFace.
+      var viewMat = mat.clone();
+      viewMats.push(viewMat);
+      var capMesh = new THREE.Mesh(geo, [mat, viewMat]);
       container.add(capMesh);
+      capParts.push({ mesh: capMesh, geo: geo, spans: faceSpans[g],
+                      total: posArrays[g].length / 3 });
       faceBuffers.push({ attr: geo.getAttribute("color"), spans: faceSpans[g], cap: g,
                          geo: geo, pos: geo.getAttribute("position"),
                          idx: idxArrays[g] });
@@ -835,75 +1007,32 @@
       groups.push(container);
     }
 
-    var flat = null, viewNormal = null, faceSpan = 1;
-    if (lay){
-      var vf = data.faces[lay.viewFace];
-      var c0 = new THREE.Vector3();
-      vf.forEach(function(vi){ c0.add(positions[vi]); });
-      c0.divideScalar(vf.length);
-      var nrm = new THREE.Vector3().subVectors(positions[vf[1]], positions[vf[0]])
-        .cross(new THREE.Vector3().subVectors(positions[vf[2]], positions[vf[0]]))
-        .normalize();
-      if (nrm.dot(c0) < 0) nrm.negate();
-      var uax = new THREE.Vector3().subVectors(positions[vf[0]], c0).normalize();
-      var vaxRaw = new THREE.Vector3().crossVectors(nrm, uax).normalize();
-      var vax = vaxRaw.clone();
-
-      // Fit the layout onto the real face rather than assuming it is already
-      // pointing the right way. The layout carries its own rotation (upright()
-      // turns it so a chosen vertex is up) and its own handedness, and
-      // dropping it into an arbitrary in-plane basis puts the outer face's
-      // vertices in the wrong slots -- which on the dodecahedron produced a
-      // diagram whose edges crossed, and on every solid made the vertices
-      // spin on their way out instead of travelling straight.
-      //
-      // So solve for the similarity that carries the layout's copy of this
-      // face onto the real one: as complex numbers, z -> c*z or c*conj(z),
-      // whichever fits better. Least squares over all of the face's vertices,
-      // so no single one decides it.
-      var lc = [0, 0];
-      vf.forEach(function(vi){ lc[0] += lay.pts[vi][0]; lc[1] += lay.pts[vi][1]; });
-      lc[0] /= vf.length; lc[1] /= vf.length;
-      var ar = 0, ai = 0, br = 0, bi = 0, ll = 0;
-      vf.forEach(function(vi){
-        var lx = lay.pts[vi][0] - lc[0], ly = lay.pts[vi][1] - lc[1];
-        var w = positions[vi].clone().sub(c0);
-        var qx = w.dot(uax), qy = w.dot(vaxRaw);
-        ar += lx * qx + ly * qy;  ai += lx * qy - ly * qx;   // conj(l) * q
-        br += lx * qx - ly * qy;  bi += lx * qy + ly * qx;   // l * q
-        ll += lx * lx + ly * ly;
-      });
-      var refl = Math.hypot(br, bi) > Math.hypot(ar, ai);
-      var cr = (refl ? br : ar) / (ll || 1), ci = (refl ? bi : ai) / (ll || 1);
-      faceSpan = 0;
-      vf.forEach(function(vi){
-        faceSpan = Math.max(faceSpan, positions[vi].distanceTo(c0));
-      });
-      flat = lay.pts.map(function(q){
-        var lx = q[0] - lc[0], ly = (refl ? -1 : 1) * (q[1] - lc[1]);
-        return c0.clone().addScaledVector(uax, cr * lx - ci * ly)
-                         .addScaledVector(vaxRaw, ci * lx + cr * ly);
-      });
-      // "up" has to be the fitted layout's up, not the basis vector it was
-      // fitted from, or the camera rolls to the wrong angle and the diagram
-      // arrives tilted.
-      var uy = refl ? [ci, -cr] : [-ci, cr];
-      vax = new THREE.Vector3().addScaledVector(uax, uy[0])
-                               .addScaledVector(vaxRaw, uy[1]).normalize();
-      viewNormal = nrm;
-    }
-
     // Every edge of the solid, as a line. In the solid it is a faint
     // scaffold under the faces; in the diagram it is the whole drawing.
+    var base = positions.map(function(p){ return p.clone(); });
     currentMorph = {
-      base: positions.map(function(p){ return p.clone(); }),
-      flat: flat || positions.map(function(p){ return p.clone(); }),
-      normal: viewNormal, span: faceSpan, wires: wires,
-      centre: (lay ? c0.clone() : new THREE.Vector3()),
-      up: (lay ? vax.clone() : new THREE.Vector3(0, 0, 1)),
-      faceMats: faceMats, viewMats: viewMats, viewFace: viewFace,
-      inlays: inlays, canFlatten: !!flat
+      data: data, base: base, flat: base, wires: wires, caps: capParts,
+      normal: null, span: 1, centre: new THREE.Vector3(),
+      up: new THREE.Vector3(0, 0, 1), turnSeconds: TURN_MAX,
+      // Each face's outward normal, which is the whole of what choosing a
+      // face comes down to: the one most nearly facing the reader.
+      normals: data.faces.map(function(f){
+        var n = new THREE.Vector3().subVectors(positions[f[1]], positions[f[0]])
+          .cross(new THREE.Vector3().subVectors(positions[f[2]], positions[f[0]]))
+          .normalize();
+        var c = new THREE.Vector3();
+        f.forEach(function(vi){ c.add(positions[vi]); });
+        if (n.dot(c) < 0) n.negate();
+        return n;
+      }),
+      faceMats: faceMats, viewMats: viewMats, viewFace: -1,
+      inlays: inlays, canFlatten: false
     };
+    // Plan once now, for wherever the camera happens to be, so the tickbox
+    // knows whether this solid has a diagram at all and a rebuild that
+    // arrives already flat has something to arrive at. It is planned again
+    // the moment the reader asks, for wherever they are looking by then.
+    replan();
 
     currentGroups = groups;
     currentDirections = directions;
@@ -1037,7 +1166,21 @@
     // ends up close, and a tube sized for the whole solid reads as a girder.
     var shrinkSeam = 1 - 0.55 * beat(morphT, 0.04, 0.40);   // with the turn
     var r = SEAM_R * seamWidth * shrinkSeam;
-    var dotScale = Math.max(1, (r * 1.45) / DOT_R) * shrinkSeam;
+    // A dot is a fixed multiple of the tube it caps, and nothing else.
+    //
+    // It used to be Math.max(1, (r * 1.45) / DOT_R) * shrinkSeam, which got
+    // this wrong twice. The floor meant the dots stopped answering the slider
+    // the moment the tube was thin -- over the whole slider in the diagram,
+    // where the seam is already at 0.45, so the tubes grew and the dots sat
+    // still. And shrinkSeam was applied a second time on top of an r that
+    // already carried it, so wherever the floor did not bite the dots shrank
+    // twice as fast as the tubes they belong to.
+    //
+    // Since DOT_R is the sphere's own radius and SEAM_R the tube's at
+    // thickness 1.00, r / SEAM_R is the scale that keeps the dot exactly
+    // DOT_R / SEAM_R times the tube -- 1.71, the ratio the solid has always
+    // shown at the default -- at every thickness and in both views.
+    var dotScale = r / SEAM_R;
     var P = livePositions();
     currentSeam.edges.forEach(function(e){
       var grown = tracing ? Math.min(1, Math.max(0, traceT - e.step)) : 1;
@@ -1307,6 +1450,9 @@
     if (!currentMorph || !currentMorph.canFlatten){ flatten.checked = false; return; }
     morphTarget = flatten.checked ? 1 : 0;
     if (flatten.checked){
+      // Now, while the camera is still where the reader put it. A moment
+      // later it is on its way and the question has no answer.
+      replan();
       autoRotate.checked = false; controls.autoRotate = false;
       followSeam.checked = false; following = false;
       captureHome();
@@ -1418,10 +1564,28 @@
       inl.morphU = viewFade;
       inlayFade(inl);
     });
-    var wireOp = 0.25 + 0.75 * beat(morphT, 0.58, 0.92);
+    // Nothing at rest. It used to sit at a quarter opacity on the closed
+    // solid, as a "faint scaffold under the faces" -- but it is not under
+    // them, it is exactly ON them, sharing their vertices. Two surfaces at
+    // the same depth means neither wins the depth test consistently, and
+    // what came out was a stippled light line along every crease. On the
+    // near-black palette that reads as a gap between two faces that are in
+    // fact touching. The solid already shows its creases through flat
+    // shading; the wireframe has a job only once the surface starts to go.
+    //
+    // It comes in on two stages it can share rather than one of its own.
+    // Starting it just before the explosion put it after the hold, where
+    // NOTHING else is moving -- measured, two consecutive frames identical to
+    // the pixel -- and thin bright lines arriving on a dead-still picture
+    // read as a cut however gently their alpha rises. So it begins with the
+    // face we look through, while there is already something to watch, and
+    // reaches full strength as the surface goes and the drawing becomes the
+    // only thing left.
+    var wireOp = 0.55 * beat(morphT, OPEN[0], OPEN[1])
+               + 0.45 * beat(morphT, 0.74, 0.95);
     currentMorph.wires.forEach(function(w){
       w.mesh.material.opacity = wireOp;
-      w.mesh.visible = true;
+      w.mesh.visible = wireOp > 0.004;
     });
 
     if (morphT <= 0 && morphTarget <= 0 && morphHome){
@@ -1531,7 +1695,13 @@
       goal = Math.min(morphTarget, Math.max(TURN[1], morphT));
     }
     if (morphT !== goal){
-      var step = dt / MORPH_SECONDS;
+      // The turn runs on its own clock, because its length is now a real
+      // angle rather than a fixed share of the morph. Inside the turn's
+      // slice morphT crosses that slice in turnSeconds; outside it, the rest
+      // of the timetable keeps the pace it always had. Everything downstream
+      // still reads plain morphT, so no stage boundary moves.
+      var step = dt * (morphT < TURN[1] ? TURN[1] / currentMorph.turnSeconds
+                                        : 1 / MORPH_SECONDS);
       morphT += Math.min(step, Math.abs(goal - morphT)) * (goal > morphT ? 1 : -1);
       applyMorph();
       applySeam();
