@@ -394,8 +394,12 @@ def compute_fold_edges(faces, path):
 
 
 class Solid:
-    def __init__(self, name, vertices, faces, cycle):
+    def __init__(self, name, vertices, faces, cycle, label=None):
         self.name, self.vertices, self.faces, self.cycle = name, vertices, faces, cycle
+        # What the visualizer calls it. It lives here rather than in the page
+        # so that adding a solid is one edit in one file; see
+        # gen_polyhedra_js.py.
+        self.label = label or name
         self.verify()
 
     def verify(self):
@@ -507,6 +511,7 @@ _DOD_VERTS, _DOD_FACES = _dual_of(_ICO_VERTS, _ICO_FACES)
 ICOSAHEDRON = Solid(
     "Icosahedron", _ICO_VERTS, _ICO_FACES,
     [0, 11, 5, 1, 7, 6, 3, 8, 9, 4, 2, 10],
+    label="Icosahedron (d20)",
 )
 
 # Chosen from the 30 Hamiltonian cycles of the dodecahedron; every one of them
@@ -515,6 +520,7 @@ ICOSAHEDRON = Solid(
 DODECAHEDRON = Solid(
     "Dodecahedron", _DOD_VERTS, _DOD_FACES,
     [0, 6, 15, 5, 1, 2, 3, 8, 17, 12, 13, 18, 9, 19, 14, 10, 11, 16, 7, 4],
+    label="Dodecahedron (d12)",
 )
 
 def _orient(vertices, faces):
@@ -579,14 +585,15 @@ def _trapezohedron():
 _TRAP_VERTS, _TRAP_FACES = _trapezohedron()
 
 TETRAHEDRON = Solid("Tetrahedron", _TET_VERTS, _orient(_TET_VERTS, _TET_FACES),
-                    [0, 1, 2, 3])
+                    [0, 1, 2, 3], label="Tetrahedron (d4)")
 CUBE = Solid("Cube", _CUBE_VERTS, _orient(_CUBE_VERTS, _CUBE_FACES),
-             [0, 1, 2, 3, 7, 6, 5, 4])
+             [0, 1, 2, 3, 7, 6, 5, 4], label="Cube (d6)")
 OCTAHEDRON = Solid("Octahedron", _OCT_VERTS, _orient(_OCT_VERTS, _OCT_FACES),
-                   [0, 2, 1, 4, 3, 5])
+                   [0, 2, 1, 4, 3, 5], label="Octahedron (d8)")
 TRAPEZOHEDRON = Solid("Pentagonal Trapezohedron", _TRAP_VERTS,
                       _orient(_TRAP_VERTS, _TRAP_FACES),
-                      [0, 2, 7, 3, 8, 4, 9, 5, 10, 1, 11, 6])
+                      [0, 2, 7, 3, 8, 4, 9, 5, 10, 1, 11, 6],
+                      label="Pentagonal Trapezohedron (d10)")
 
 # ordered by face count, the way the web visualiser lists them
 SOLIDS = {

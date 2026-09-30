@@ -100,9 +100,11 @@ mathematics-and-art course project (EDCP 342).
 
 ```
 index.html              the visualizer; three.js is vendored in vendor/
+polyhedra.js            generated — the solids, from hardware/scripts/polyhedra.py
 downloads.js            generated — what the page offers, and its real figures
 hardware/scripts/       every generator and check
 hardware/tests/         the generated STLs, PDFs and renders
+ROADMAP.md              what is coming, and what was turned down and why
 ```
 
 Everything in `hardware/tests/` is generated. To rebuild all of it:
@@ -112,8 +114,12 @@ pip install manifold3d numpy shapely matplotlib
 python3 hardware/scripts/gen_downloads.py
 ```
 
-That writes every STL and PDF **and** `downloads.js` in the same run, so the
-sizes quoted on the page cannot drift from the files you download.
+That writes every STL and PDF **and** `downloads.js` **and** `polyhedra.js` in
+the same run, so neither the sizes quoted on the page nor the cut it draws can
+drift from the files you download. The solids are defined once, in
+`hardware/scripts/polyhedra.py`, which checks each one — Euler's formula, the
+cycle visiting every vertex exactly once, every step of it a real edge, every
+face planar — and the page reads what passed.
 
 The checks are the interesting part of the scripts. Each generator measures
 its result off the finished mesh instead of trusting the design: the seam is
