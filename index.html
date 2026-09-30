@@ -1166,7 +1166,21 @@
     // ends up close, and a tube sized for the whole solid reads as a girder.
     var shrinkSeam = 1 - 0.55 * beat(morphT, 0.04, 0.40);   // with the turn
     var r = SEAM_R * seamWidth * shrinkSeam;
-    var dotScale = Math.max(1, (r * 1.45) / DOT_R) * shrinkSeam;
+    // A dot is a fixed multiple of the tube it caps, and nothing else.
+    //
+    // It used to be Math.max(1, (r * 1.45) / DOT_R) * shrinkSeam, which got
+    // this wrong twice. The floor meant the dots stopped answering the slider
+    // the moment the tube was thin -- over the whole slider in the diagram,
+    // where the seam is already at 0.45, so the tubes grew and the dots sat
+    // still. And shrinkSeam was applied a second time on top of an r that
+    // already carried it, so wherever the floor did not bite the dots shrank
+    // twice as fast as the tubes they belong to.
+    //
+    // Since DOT_R is the sphere's own radius and SEAM_R the tube's at
+    // thickness 1.00, r / SEAM_R is the scale that keeps the dot exactly
+    // DOT_R / SEAM_R times the tube -- 1.71, the ratio the solid has always
+    // shown at the default -- at every thickness and in both views.
+    var dotScale = r / SEAM_R;
     var P = livePositions();
     currentSeam.edges.forEach(function(e){
       var grown = tracing ? Math.min(1, Math.max(0, traceT - e.step)) : 1;
@@ -1558,7 +1572,17 @@
     // near-black palette that reads as a gap between two faces that are in
     // fact touching. The solid already shows its creases through flat
     // shading; the wireframe has a job only once the surface starts to go.
-    var wireOp = beat(morphT, 0.58, 0.92);
+    //
+    // It comes in on two stages it can share rather than one of its own.
+    // Starting it just before the explosion put it after the hold, where
+    // NOTHING else is moving -- measured, two consecutive frames identical to
+    // the pixel -- and thin bright lines arriving on a dead-still picture
+    // read as a cut however gently their alpha rises. So it begins with the
+    // face we look through, while there is already something to watch, and
+    // reaches full strength as the surface goes and the drawing becomes the
+    // only thing left.
+    var wireOp = 0.55 * beat(morphT, OPEN[0], OPEN[1])
+               + 0.45 * beat(morphT, 0.74, 0.95);
     currentMorph.wires.forEach(function(w){
       w.mesh.material.opacity = wireOp;
       w.mesh.visible = wireOp > 0.004;
