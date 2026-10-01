@@ -15,8 +15,11 @@ something we already intend to change.
    main area. Trace and paint became separate controls, camera-follow stayed
    a sibling rather than a child. Reset view in a canvas corner. URL state
    (`#solid/tab/palette`).
-3. ~~**Colour in the diagram.**~~ *(done)* The two caps stay filled at about
-   half opacity rather than fading to a line drawing, and the outer region —
+3. ~~**Colour in the diagram.**~~ *(done)* The two caps stay filled at the
+   same strength they have on the solid — half opacity over a near-black
+   background turned out to cost almost no saturation (0.66 → 0.57) and
+   nearly half the brightness (0.77 → 0.44), which reads as washed out
+   rather than as further away — and the outer region —
    the face we looked *through*, which a Schlegel diagram turns inside out —
    is washed in its own cap's colour, strongest against the outline and dying
    to the background well before the canvas edge. A flat fill would have read
@@ -25,8 +28,13 @@ something we already intend to change.
    claims it, and it takes the cap it genuinely belongs to — which is why
    along a stretch of outline the cycle does *not* run, the wash and the face
    inside it are the same colour. That is the point: there the outer face is
-   still joined to its cap. A census line under the stats, from
-   `hardware/scripts/census.py`.
+   still joined to its cap, and the wash is brightest exactly at those
+   joins and quietest along the seam. A census line under the stats, from
+   `hardware/scripts/census.py`. And a third palette, **plain**: one colour
+   for both halves, so the diagram can be read as a drawing before it is read
+   as an answer. The seam still runs through it, so the cut is visible and
+   only the verdict is withheld. Its legend collapses to a single row, since
+   two swatches of one colour name nothing.
 4. **Drawing the cycle.** Drag across vertices in the Diagram tab; the solid
    splits when the loop closes. Brings with it the "Make it" explanation of
    why a given cut is or is not printable, which cannot be tested before

@@ -250,6 +250,7 @@
         <select id="paletteSelect">
           <option value="standard">Two colours (clearest)</option>
           <option value="yinyang">Yin-yang: black &amp; white, with inlays</option>
+          <option value="plain">Plain: one colour, no cap given away</option>
         </select>
       </div>
       <div class="field checkbox-row" data-tabs="solid">
@@ -269,8 +270,8 @@
         <label for="followSeam" style="margin:0; text-transform:none; letter-spacing:normal;">Camera follows the seam</label>
       </div>
       <div id="legend" data-tabs="solid diagram">
-        <div><span class="swatch" style="background:var(--groupA)"></span>Cap A</div>
-        <div><span class="swatch" style="background:var(--groupB)"></span>Cap B</div>
+        <div id="legendA"><span class="swatch" style="background:var(--groupA)"></span><span id="legendAText">Cap A</span></div>
+        <div id="legendB"><span class="swatch" style="background:var(--groupB)"></span>Cap B</div>
         <div><span class="swatch" style="background:var(--seam)"></span>Hamiltonian cycle (seam)</div>
         <div class="outer-row" data-tabs="diagram"><span class="swatch outer"></span>Outside &mdash; the face you look through</div>
       </div>
@@ -557,7 +558,19 @@
     // an edge and the light half keeps its own.
     yinyang:  { caps: [0xf6f1e6, 0x1d1e24], bg: 0x3c414b,
                 amb: 0.80, k1: 0.30, k2: 0.15, inlay: true,
-                css: ["#f6f1e6", "#1d1e24"] }
+                css: ["#f6f1e6", "#1d1e24"] },
+    // One colour for both halves, for reading the diagram as a drawing
+    // rather than as a claim about which half is which. The cut is still
+    // completely visible -- the seam is drawn in its own colour and runs
+    // right through the middle of it -- so this hides the ANSWER, not the
+    // question, which is the version worth having in front of someone who
+    // is about to work it out for themselves.
+    //
+    // Deliberately lighter than NEUTRAL rather than equal to it, or "paint
+    // the caps as it cuts" would have nothing to show in this palette.
+    plain:    { caps: [0x9ba3b0, 0x9ba3b0], bg: 0x12141c,
+                amb: 0.55, k1: 0.80, k2: 0.35, inlay: false,
+                css: ["#9ba3b0", "#9ba3b0"] }
   };
   var paletteName = "standard";
   var NEUTRAL = 0x767d8d;   // a face the cycle has not reached yet
@@ -590,7 +603,6 @@
   // animation skipped its own first sentence. The holds are there so each
   // stage is read as having finished before the next one starts.
   var TURN = [0.0, 0.28], OPEN = [0.38, 0.56], BURST = [0.60, 1.0];
-  var DIAGRAM_FILL = 0.52;   // how much of the surface the diagram keeps
   // The outer face. A Schlegel diagram has as many regions as the solid has
   // faces -- but one of them is the whole of the plane outside the drawing,
   // which is the face we looked THROUGH, turned inside out. Nothing on the
@@ -604,9 +616,22 @@
   // the view face belongs to, and it takes it at the same moment that face
   // would have taken it, so the count and the painting both come out right.
   var HALO_REACH = 3.0;    // outward, in multiples of the view face's radius
-  var HALO_ALPHA = 0.30;   // against the outline, before the morph fades it in
+  var HALO_ALPHA = 0.46;   // against the outline, before the morph fades it in
   var HALO_FALL = 3;       // how sharply it dies: higher is tighter to the rim
   var HALO_RINGS = 10;     // bands the falloff is sampled over
+  // Not every edge of the outline is the same kind of edge. Where the cycle
+  // runs along it, the outer face is CUT from whatever is inside -- that is
+  // the seam, and the two sides are opposite caps. Where it does not, the
+  // outer face is still joined to the region inside it, and they are the
+  // same cap wearing the same colour. There are one or two such edges
+  // depending on whether the outer face sits at the end of its strip or
+  // somewhere along it.
+  //
+  // So the wash is brightest exactly there, at the joins, and quietest along
+  // the seam. It is the one thing about the diagram that the outline alone
+  // cannot say: which way out of the picture the surface continues.
+  var HALO_JOIN = 1.0;     // the open edges, where the cap continues outward
+  var HALO_CUT = 0.34;     // the seam, where it does not
   var halo = null;
   var morphHome = null;    // the camera to give back when it unflattens
   var TURN_DEG_PER_SEC = 120;   // how fast the solid swings to face the reader
@@ -745,25 +770,53 @@
     vf.forEach(function(vi){ c.add(currentMorph.flat[vi]); });
     c.divideScalar(vf.length);
 
+    // How bright the wash is along each edge of the outline: full where the
+    // cycle does not run, dim where it does. See HALO_JOIN.
+    var onCycle = {};
+    var cyc = currentMorph.data.cycle;
+    for (var ci = 0; ci < cyc.length; ci++){
+      onCycle[edgeKey(cyc[ci], cyc[(ci + 1) % cyc.length])] = true;
+    }
+    var edgeW = vf.map(function(vi, k){
+      return onCycle[edgeKey(vi, vf[(k + 1) % vf.length])] ? HALO_CUT : HALO_JOIN;
+    });
+
+    // Each edge contributes its midpoint as well as its corner, so the
+    // weight can hold along the edge and change only near the corners. A
+    // corner is shared by two edges and takes their mean, which is what
+    // turns a step between a lit edge and a dim one into a ramp -- without
+    // the midpoints the two weights would be interpolated across the whole
+    // edge and no edge would ever show its own value.
+    var rim = [], wt = [];
+    vf.forEach(function(vi, k){
+      var prev = (k + vf.length - 1) % vf.length;
+      rim.push(currentMorph.flat[vi]);
+      wt.push((edgeW[prev] + edgeW[k]) / 2);
+      rim.push(currentMorph.flat[vi].clone()
+               .lerp(currentMorph.flat[vf[(k + 1) % vf.length]], 0.5));
+      wt.push(edgeW[k]);
+    });
+    var n = rim.length;
+
     var pos = [], col = [];
     function ring(j){
-      var s = 1 + (HALO_REACH - 1) * j / HALO_RINGS;
-      return vf.map(function(vi){
-        return c.clone().addScaledVector(
-          _a.copy(currentMorph.flat[vi]).sub(c), s);
+      var sc = 1 + (HALO_REACH - 1) * j / HALO_RINGS;
+      return rim.map(function(q){
+        return c.clone().addScaledVector(_a.copy(q).sub(c), sc);
       });
     }
     function alpha(j){ return Math.pow(1 - j / HALO_RINGS, HALO_FALL); }
     for (var j = 0; j < HALO_RINGS; j++){
       var inner = ring(j), outer = ring(j + 1);
       var ai = alpha(j), ao = alpha(j + 1);
-      for (var k = 0; k < vf.length; k++){
-        var k2 = (k + 1) % vf.length;
+      for (var k = 0; k < n; k++){
+        var k2 = (k + 1) % n;
         // Two triangles per band segment. The rgb is white throughout: the
         // hue lives on the material, because it changes as the seam paints
         // and rewriting one colour beats rewriting the whole buffer.
-        [[inner[k], ai], [inner[k2], ai], [outer[k2], ao],
-         [inner[k], ai], [outer[k2], ao], [outer[k], ao]].forEach(function(e){
+        [[inner[k], ai * wt[k]], [inner[k2], ai * wt[k2]], [outer[k2], ao * wt[k2]],
+         [inner[k], ai * wt[k]], [outer[k2], ao * wt[k2]], [outer[k], ao * wt[k]]]
+        .forEach(function(e){
           pos.push(e[0].x, e[0].y, e[0].z);
           col.push(1, 1, 1, e[1]);
         });
@@ -969,7 +1022,6 @@
     var wires = [];
     var faceBuffers = [];
     var inlays = [];
-    var faceMats = [];
     var viewMats = [];
     var capParts = [];
     for (var g = 0; g < 2; g++){
@@ -994,8 +1046,13 @@
         // an edge rather than a dashed one.
         polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1
       });
+      // Transparent although it never drops below full opacity, because the
+      // flag decides which PASS it draws in and that is load-bearing: the
+      // outer-face wash is a transparent mesh at renderOrder -1, so it draws
+      // first among transparents and the surface blends over it. Marked
+      // opaque, the surface would move to the pass BEFORE the wash, and the
+      // wash -- which does not depth-test -- would paint over the diagram.
       mat.transparent = true;
-      faceMats.push(mat);
 
       // One mesh per cap, and every cap is built ABLE to single a face out,
       // whether or not it currently holds the one we look through. Both carry
@@ -1146,7 +1203,7 @@
         if (n.dot(c) < 0) n.negate();
         return n;
       }),
-      faceMats: faceMats, viewMats: viewMats, viewFace: -1,
+      viewMats: viewMats, viewFace: -1,
       inlays: inlays, canFlatten: false
     };
     // Plan once now, for wherever the camera happens to be, so the tickbox
@@ -1517,6 +1574,14 @@
 
   function applyPalette(){
     var pal = PALETTES[paletteName];
+    // Two swatches of the same colour name nothing. When a palette gives
+    // both halves one colour the pair collapses into a single row, because
+    // a legend that distinguishes what the picture does not is worse than
+    // no legend at all.
+    var oneColour = pal.caps[0] === pal.caps[1];
+    document.getElementById("legendB").hidden = oneColour;
+    document.getElementById("legendAText").textContent =
+      oneColour ? "Both caps" : "Cap A";
     scene.background = new THREE.Color(pal.bg);
     ambient.intensity = pal.amb;
     key1.intensity = pal.k1;
@@ -1818,17 +1883,24 @@
     // filled face to fight for the same plane, once the face being looked
     // through -- the one that became the outer boundary -- has gone.
     var viewFade = 1 - beat(morphT, OPEN[0], OPEN[1]);
-    // The surface recedes but does not go. A Schlegel diagram's faces tile
-    // their region without overlapping, so the two caps survive the flattening
-    // as coloured areas -- which is the same claim the solid makes, carried
-    // across rather than dropped at the end of the journey. It is also what
+    // The rest of the surface does not fade at all. A Schlegel diagram's
+    // faces tile their region without overlapping, so the two caps survive
+    // the flattening as coloured areas -- the same claim the solid makes,
+    // carried across rather than dropped at the end of the journey, and what
     // gives "paint the caps as it cuts" something to paint in the diagram.
     //
-    // The blank version is not lost: it is the Schlegel PDF in Make it, which
-    // exists precisely to be drawn on by hand.
-    var fade = 1 - (1 - DIAGRAM_FILL) * beat(morphT, 0.74, 0.99);
-    currentMorph.faceMats.forEach(function(m){ setFade(m, fade, false); });
-    currentMorph.viewMats.forEach(function(m){ setFade(m, Math.min(fade, viewFade), true); });
+    // It used to arrive at about half opacity, as a surface that had
+    // "receded". Measured against the solid, that was not a recession but a
+    // dimming: half of the colour blended over a near-black background keeps
+    // most of its saturation (0.66 -> 0.57) and loses nearly half its
+    // brightness (0.77 -> 0.44), which the eye reads as washed out rather
+    // than as further away. At full strength the diagram's red measures
+    // (197,73,67) against the solid's (196,72,66) -- the same surface, seen
+    // flat.
+    //
+    // The colourless version is not lost: it is the plain palette, and the
+    // printable Schlegel PDF in Make it, which exists to be drawn on by hand.
+    currentMorph.viewMats.forEach(function(m){ setFade(m, viewFade, true); });
     // The inlays go with the turn, not with the surface. They are proud of
     // the faces rather than part of them, so a fade that tracks the face
     // under each one leaves them floating a moment either way, and they are
