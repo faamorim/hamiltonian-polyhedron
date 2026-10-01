@@ -40,8 +40,41 @@
   #main{
     flex:1; display:flex; min-height:0;
   }
+  /* The tab strip belongs to the main area, not the sidebar: it governs what
+     fills the stage, and the sidebar follows it rather than the other way
+     round. */
+  #stage{
+    flex:1; display:flex; flex-direction:column; min-width:0; min-height:0;
+  }
+  #tabs{
+    display:flex; gap:2px; padding:0 14px;
+    background:var(--panel); border-bottom:1px solid var(--panel-border);
+  }
+  .tab{
+    appearance:none; border:none; background:none; cursor:pointer;
+    color:var(--text-dim); font:inherit; font-size:0.86rem;
+    padding:10px 16px 9px; border-bottom:2px solid transparent;
+    margin-bottom:-1px;
+  }
+  .tab:hover{ color:var(--text); }
+  .tab[aria-selected="true"]{
+    color:var(--text); border-bottom-color:var(--accent);
+  }
+  .tab:disabled{ color:#4a4f5e; cursor:not-allowed; }
+  .tab:focus-visible{ outline:2px solid var(--accent); outline-offset:-2px; }
   #canvas-wrap{
-    flex:1; position:relative; min-width:0;
+    flex:1; position:relative; min-width:0; min-height:0;
+  }
+  /* Where the downloads live now. In the sidebar they were good cards in a
+     280px column; here they get the width they were designed for. */
+  #makePane{
+    flex:1; overflow-y:auto; padding:22px 24px; min-height:0;
+  }
+  #makePane h2{
+    margin:0 0 4px; font-size:1.0rem; font-weight:600;
+  }
+  #makePane > p{
+    margin:0 0 20px; font-size:0.85rem; color:var(--text-dim); max-width:62ch;
   }
   #canvas-wrap canvas{ display:block; width:100%; height:100%; }
   #sidebar{
@@ -51,6 +84,16 @@
     border-left:1px solid var(--panel-border);
   }
   .field{ margin-bottom:18px; }
+  /* A row belongs to one or more tabs. Switching tabs is an expected change
+     of place, so a row that does not apply is removed rather than greyed --
+     which is the opposite of the rule WITHIN a tab, below, where a row
+     vanishing would reflow the panel under the reader's eye.
+     Hidden by an attribute rather than by clearing style.display, because a
+     .field is display:block and a .checkbox-row is display:flex -- clearing
+     the inline style falls back to whatever the stylesheet says, which is
+     how every row in the sidebar disappeared the first time. The two
+     selectors together out-specify .checkbox-row without needing !important. */
+  [data-tabs][hidden]{ display:none; }
   /* A control that has nothing to act on is greyed where it stands rather
      than removed: pulling a row out of the sidebar reflows everything below
      it, so the panel jumps and the reader has to find their place again. */
@@ -78,38 +121,39 @@
     font-size:0.8rem; color:var(--text-dim); line-height:1.6;
   }
   #stats b{ color:var(--text); }
-  #downloads{
-    margin-top:6px; padding-top:14px; border-top:1px solid var(--panel-border);
+  #downloadList{
     font-size:0.8rem; color:var(--text-dim); line-height:1.5;
+    display:grid; gap:10px 14px; max-width:860px;
+    grid-template-columns:repeat(auto-fit, minmax(260px, 1fr));
   }
-  #downloads h2{
-    margin:0 0 8px; font-size:0.8rem; font-weight:600;
-    color:var(--text); letter-spacing:0.04em; text-transform:uppercase;
+  .offer{ display:flex; flex-direction:column; gap:7px; }
+  .note-row{
+    margin:0; font-size:0.74rem; color:var(--text-dim); line-height:1.45;
   }
-  #downloads a{
-    display:block; color:var(--text); text-decoration:none;
+  #downloadList a{
+    display:block; margin:0; color:var(--text); text-decoration:none;
     border:1px solid var(--panel-border); border-radius:6px;
-    padding:7px 9px; margin-bottom:6px; background:#161926;
+    padding:10px 12px; background:#161926;
   }
-  #downloads a:hover{ border-color:var(--accent); }
-  #downloads a .label{ display:block; font-size:0.83rem; }
-  #downloads a .note{ display:block; font-size:0.74rem; color:var(--text-dim); margin-top:2px; }
-  #downloads a .kind{
+  #downloadList a:hover{ border-color:var(--accent); }
+  #downloadList a .label{ display:block; font-size:0.83rem; }
+  #downloadList a .note{ display:block; font-size:0.74rem; color:var(--text-dim); margin-top:2px; }
+  #downloadList a .kind{
     float:right; font-size:0.66rem; letter-spacing:0.06em;
     color:var(--accent); border:1px solid var(--panel-border);
     border-radius:3px; padding:1px 5px; margin-left:8px;
   }
-  #downloads .none{ font-size:0.78rem; }
-  #downloads .sizeRow{
+  #downloadList .none{ font-size:0.78rem; }
+  #downloadList .sizeRow{
     display:flex; align-items:center; gap:8px;
     margin:0 0 6px; font-size:0.74rem; color:var(--text-dim);
   }
-  #downloads .sizeRow select{
+  #downloadList .sizeRow select{
     flex:1; background:#161926; color:var(--text);
     border:1px solid var(--panel-border); border-radius:5px;
     padding:4px 6px; font:inherit; font-size:0.76rem;
   }
-  #downloads .sizeRow select:hover{ border-color:var(--accent); }
+  #downloadList .sizeRow select:hover{ border-color:var(--accent); }
   #credit{
     margin-top:14px; padding-top:14px; border-top:1px solid var(--panel-border);
     font-size:0.78rem; color:var(--text-dim); line-height:1.5;
@@ -135,59 +179,69 @@
     <p>A Hamiltonian cycle visits every vertex exactly once. On a polyhedron's surface it also acts as a seam: it splits the faces into two caps, and because the cycle itself passes through every vertex, <strong>both caps keep the full vertex set on their rim</strong> when pulled apart. Drag to orbit, use the panel to separate the caps.</p>
   </header>
   <div id="main">
-    <div id="canvas-wrap"></div>
+    <div id="stage">
+      <div id="tabs" role="tablist" aria-label="View">
+        <button class="tab" id="tabSolid"   role="tab" data-tab="solid"
+                aria-selected="true">Solid</button>
+        <button class="tab" id="tabDiagram" role="tab" data-tab="diagram"
+                aria-selected="false">Diagram</button>
+        <button class="tab" id="tabMake"    role="tab" data-tab="make"
+                aria-selected="false">Make it</button>
+      </div>
+      <div id="canvas-wrap"></div>
+      <div id="makePane" hidden>
+        <h2>Make it</h2>
+        <p>One cut, in paper and in plastic. The sizes are a ladder rather than
+           a slider because the hinge is a fixed thickness in millimetres while
+           the faces scale &mdash; each rung is generated and checked at its own
+           size.</p>
+        <div id="downloadList"></div>
+      </div>
+    </div>
     <div id="sidebar">
-      <div class="field">
+      <div class="field" data-tabs="solid diagram make">
         <label for="shapeSelect">Polyhedron</label>
         <select id="shapeSelect"></select>
       </div>
-      <div class="field">
+      <div class="field" data-tabs="solid">
         <div class="row">
           <label for="sepSlider" style="margin-bottom:0">Separation</label>
           <span class="value" id="sepValue">0.00</span>
         </div>
         <input type="range" id="sepSlider" min="0" max="2.5" step="0.01" value="0">
       </div>
-      <div class="field">
+      <div class="field" data-tabs="solid diagram">
         <div class="row">
           <label for="seamSlider" style="margin-bottom:0">Seam thickness</label>
           <span class="value" id="seamValue">1.00</span>
         </div>
         <input type="range" id="seamSlider" min="0" max="3" step="0.05" value="1">
       </div>
-      <div class="field">
+      <div class="field" data-tabs="solid diagram">
         <label for="paletteSelect">Colours</label>
         <select id="paletteSelect">
           <option value="standard">Two colours (clearest)</option>
           <option value="yinyang">Yin-yang: black &amp; white, with inlays</option>
         </select>
       </div>
-      <div class="field checkbox-row">
+      <div class="field checkbox-row" data-tabs="solid">
         <input type="checkbox" id="autoRotate">
         <label for="autoRotate" style="margin:0; text-transform:none; letter-spacing:normal;">Auto-rotate</label>
       </div>
-      <div class="field checkbox-row">
+      <div class="field checkbox-row" data-tabs="solid diagram">
         <input type="checkbox" id="traceCycle">
         <label for="traceCycle" style="margin:0; text-transform:none; letter-spacing:normal;">Trace the cycle &mdash; watch it split the solid</label>
       </div>
-      <div class="field checkbox-row">
-        <input type="checkbox" id="flatten">
-        <label for="flatten" style="margin:0; text-transform:none; letter-spacing:normal;">Flatten to the Schlegel diagram</label>
-      </div>
-      <div class="field checkbox-row">
+      <div class="field checkbox-row" data-tabs="solid">
         <input type="checkbox" id="followSeam">
         <label for="followSeam" style="margin:0; text-transform:none; letter-spacing:normal;">Camera follows the seam</label>
       </div>
-      <div id="legend">
+      <div id="legend" data-tabs="solid diagram">
         <div><span class="swatch" style="background:var(--groupA)"></span>Cap A</div>
         <div><span class="swatch" style="background:var(--groupB)"></span>Cap B</div>
         <div><span class="swatch" style="background:var(--seam)"></span>Hamiltonian cycle (seam)</div>
       </div>
-      <div id="stats"></div>
-      <div id="downloads">
-        <h2>Make it</h2>
-        <div id="downloadList"></div>
-      </div>
+      <div id="stats" data-tabs="solid diagram make"></div>
       <div id="credit">
         Inspired by the mathematical art of
         <a href="https://gallery.bridgesmathart.org/exhibitions/bridges-2026-exhibition-of-mathematical-art/josep-rey-nadal" target="_blank" rel="noopener">Josep Rey Nadal</a>.
@@ -658,9 +712,9 @@
   }
 
   function restoreFlatView(){
-    if (!flatten.checked) return;
+    if (currentTab !== "diagram") return;
     if (!currentMorph || !currentMorph.canFlatten){
-      flatten.checked = false;
+      showTab("solid");
       morphT = morphTarget = 0;
       applyMorph();               // hands the camera back, if it has one
       applySeam();
@@ -964,7 +1018,8 @@
     applyFaces();
     restoreFlatView();
     applyMorph();
-    if (flatten) flatten.disabled = !currentMorph.canFlatten;
+    // A solid the page cannot flatten does not get the tab offered.
+    if (tabButtons.diagram) tabButtons.diagram.disabled = !currentMorph.canFlatten;
 
     document.getElementById("stats").innerHTML =
       "<b>" + data.vertices.length + "</b> vertices &middot; " +
@@ -1033,10 +1088,33 @@
       downloadList.innerHTML = '<div class="none">No printable files for this shape yet.</div>';
       return;
     }
-    downloadList.appendChild(fileLink(
+
+    // One section per thing you can make, each carrying its own controls and
+    // its own caveats. A flat list put the size picker and the warning about
+    // it between the cards, as though they belonged to the page rather than
+    // to the STL -- and in a grid that forced every card onto a row of its
+    // own, since a full-width row breaks the flow.
+    function offer(){
+      var sec = document.createElement("section");
+      sec.className = "offer";
+      Array.prototype.forEach.call(arguments, function(el){
+        if (el) sec.appendChild(el);
+      });
+      downloadList.appendChild(sec);
+      return sec;
+    }
+    function note(text){
+      var el = document.createElement("p");
+      el.className = "note-row";
+      el.innerHTML = text;
+      return el;
+    }
+
+    offer(fileLink(
       d.net.path, "PDF", "Fold-up net",
       "both strips of " + d.strip + " faces at " + d.net.edge.toFixed(1) +
       "mm edges at 100% &middot; A4 or Letter, or scale it to fit &mdash; paper scales fine"));
+
     var rung = pickRung(d);
     var row = document.createElement("div");
     row.className = "sizeRow";
@@ -1054,22 +1132,20 @@
       showDownloads(key);
     });
     row.appendChild(sizeSelect);
-    downloadList.appendChild(row);
-    downloadList.appendChild(fileLink(
+
+    offer(row, fileLink(
       rung.path, "STL", "3D-print strip",
       "one part, printed twice &middot; " + rung.edge.toFixed(1) + "mm edges &middot; " +
       "needs " + Math.ceil(rung.bed[0]) + " &times; " + Math.ceil(rung.bed[1]) + "mm of bed" +
       magnetNote(d, rung) +
       (rung.inlays ? " &middot; plus " + rung.inlays +
-                     " inlays per cap, in a contrasting filament" : "")));
-    var warn = document.createElement("div");
-    warn.className = "sizeRow";
-    warn.innerHTML = "Pick the size here, not in the slicer: the hinge is a fixed " +
-      "thickness in millimetres, so scaling the file scales the hinge too and it " +
-      "stops bending.";
-    downloadList.appendChild(warn);
+                     " inlays per cap, in a contrasting filament" : "")),
+      note("Pick the size here, not in the slicer: the hinge is a fixed " +
+           "thickness in millimetres, so scaling the file scales the hinge too " +
+           "and it stops bending."));
+
     d.extras.forEach(function(e){
-      downloadList.appendChild(fileLink(e.path, "PDF", e.label, e.note));
+      offer(fileLink(e.path, "PDF", e.label, e.note));
     });
   }
 
@@ -1362,11 +1438,57 @@
   // anything once the solid is a flat drawing are hidden rather than left
   // there doing nothing. There is no camera to auto-rotate and no pair of
   // caps to separate.
-  var flatten = document.getElementById("flatten");
-  flatten.addEventListener("change", function(){
-    if (!currentMorph || !currentMorph.canFlatten){ flatten.checked = false; return; }
-    morphTarget = flatten.checked ? 1 : 0;
-    if (flatten.checked){
+  // Which view the stage is showing. It was a tickbox -- "flatten to the
+  // Schlegel diagram" -- which made a place sound like a setting, and the
+  // page half-admitted it by greying out most of the panel whenever it was
+  // ticked. A tab says it outright, and the morph becomes the journey between
+  // two places rather than a property being toggled.
+  var TABS = ["solid", "diagram", "make"];
+  var currentTab = "solid";
+  var tabButtons = {};
+  TABS.forEach(function(name){
+    tabButtons[name] = document.querySelector('.tab[data-tab="' + name + '"]');
+  });
+  var canvasWrap = document.getElementById("canvas-wrap");
+  var makePane = document.getElementById("makePane");
+
+  function showTab(name){
+    if (TABS.indexOf(name) < 0) name = "solid";
+    // A solid with no diagram to show cannot host that tab.
+    if (name === "diagram" && (!currentMorph || !currentMorph.canFlatten)) return;
+    currentTab = name;
+
+    TABS.forEach(function(t){
+      tabButtons[t].setAttribute("aria-selected", String(t === name));
+    });
+    // Each tab carries only the controls it can act on. Within a tab a dead
+    // control is greyed where it stands, because a row vanishing reflows the
+    // panel under the reader's eye -- but a tab switch is an expected change
+    // of place, so here the rows really do come and go.
+    Array.prototype.forEach.call(document.querySelectorAll("[data-tabs]"), function(el){
+      el.hidden = el.getAttribute("data-tabs").split(" ").indexOf(name) < 0;
+    });
+
+    var onCanvas = (name !== "make");
+    canvasWrap.hidden = !onCanvas;
+    makePane.hidden = onCanvas;
+    if (onCanvas) resize();   // it may have been display:none, and so sizeless
+
+    // Solid and Diagram are the two ends of the morph. "Make it" is not a
+    // third place to morph to, so leaving the diagram for it folds the solid
+    // back up -- quietly, since the canvas is hidden -- and the reader finds
+    // it whole when they return.
+    setFlattened(name === "diagram");
+  }
+
+  TABS.forEach(function(name){
+    tabButtons[name].addEventListener("click", function(){ showTab(name); });
+  });
+
+  function setFlattened(on){
+    if (on && (!currentMorph || !currentMorph.canFlatten)) return;
+    morphTarget = on ? 1 : 0;
+    if (on){
       // Now, while the camera is still where the reader put it. A moment
       // later it is on its way and the question has no answer.
       replan();
@@ -1378,7 +1500,7 @@
       // that showed the two halves going back together.
       applyMorph();          // the controls are the page's now, not yours
     }
-  });
+  }
 
   // Where the camera was before any of this. Captured ONCE, on the way out,
   // and never overwritten on the way back: re-reading the camera when
@@ -1551,7 +1673,8 @@
 
   function resize(){
     var w = wrap.clientWidth, h = wrap.clientHeight;
-    camera.aspect = w / h;
+    if (!w || !h) return;      // hidden behind another tab; it is resized on
+    camera.aspect = w / h;     // the way back, where it has a size again
     camera.updateProjectionMatrix();
     renderer.setSize(w, h);
   }
@@ -1641,6 +1764,7 @@
   }
 
   resize();
+  showTab("solid");
   buildShape("icosahedron");
   showDownloads("icosahedron");
   animate();
