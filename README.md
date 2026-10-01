@@ -19,10 +19,16 @@ fall out, none of them accidental:
   vertex rather than around it, so the vertex ends up on both rims.
 - **Exactly `V` edges are cut** — that is Euler's formula rearranged, since
   `E − F + 2 = V`.
-- **Each half unfolds flat as a single strip.** The faces of a half, joined
-  where the cycle did *not* cut, form a path rather than a branching tree.
-  A path of faces rolls out flat without overlapping itself, which is what
-  makes the whole thing printable as one piece.
+- **Each half unfolds flat.** It has to: the cycle puts two cut edges at
+  every vertex, so the fan of faces around each vertex is broken into an arc
+  and no half ever closes a wheel around one. With no interior vertices, the
+  faces of a half form a tree, and a tree rolls out flat whatever its shape.
+- **The halves we ship also form a single *strip*** — a path of faces rather
+  than a branching tree — which is what the printed part is: one linear
+  ladder on living hinges. That is a property of this cut, not of cuts in
+  general, and it is about the hinge design rather than about flatness.
+  Whether a net overlaps itself is a separate question that has to be
+  measured; `hardware/scripts/check_unfold.py` measures it.
 
 The two halves are also **interlocked**: their mating faces point in enough
 different directions that no straight pull separates them. They come apart
@@ -124,11 +130,18 @@ face planar — and the page reads what passed.
 It also carries each solid's census, enumerated by
 `hardware/scripts/census.py`: every Hamiltonian cycle, how many are
 essentially different once the solid's own symmetries are divided out, how
-many of those fold into two flat strips, and whether the cut we ship has
-congruent halves. That last one is why a single STL can be printed twice. The
-enumeration agrees with the literature where it has an opinion — 30 cycles on
-the dodecahedron, Hamilton's own icosian game, and 1280 undirected on the
-icosahedron — and it runs in about two seconds for all six.
+many of those cut the solid into two *strips* rather than two branching
+trees, and whether the cut we ship has congruent halves. That last one is why
+a single STL can be printed twice. The enumeration agrees with the literature
+where it has an opinion — 30 cycles on the dodecahedron, Hamilton's own
+icosian game, and 1280 undirected on the icosahedron — and it runs in about
+two seconds for all six.
+
+`check_unfold.py` is the companion that answers the question `census.py` only
+appears to: it rolls every cap of every cycle out flat and measures whether
+the net overlaps itself. It establishes that every cap lies flat, strip or
+not, and that overlap is a separate property that some strips have and most
+branching caps do not.
 
 The checks are the interesting part of the scripts. Each generator measures
 its result off the finished mesh instead of trusting the design: the seam is

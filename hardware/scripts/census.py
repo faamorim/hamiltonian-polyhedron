@@ -6,13 +6,30 @@ Four numbers per solid, all computed here rather than written down:
   forms        those, counted up to the solid's own symmetry -- which for a
                3-connected planar graph is exactly its graph automorphism
                group, by Whitney, so rotations AND reflections
-  strips       the cycles whose two caps each have PATH-shaped face adjacency.
-               That is what lets a cap unfold flat as one piece: a path of
-               faces rolls out, a branching tree does not
+  strips       the cycles whose two caps each have PATH-shaped face adjacency,
+               which is what the printed part is: a linear ladder of faces on
+               living hinges. NOT a condition for lying flat -- see below
   stripForms   those, again up to symmetry
 
 and whether the cut the project ships has congruent halves, which is what
 lets one STL be printed twice.
+
+A correction worth keeping, because this file used to assert the opposite:
+a path of faces rolls out flat and "a branching tree does not" is FALSE.
+Every cap of every Hamiltonian cycle rolls out flat, branching or not. A
+cycle puts two cut edges at every vertex, which breaks the fan of faces
+around it into an arc, so no cap ever closes a wheel and no cap has an
+interior vertex -- and for a disc, a dual cycle is exactly what encircles
+one, so the dual is always a tree rather than merely connected. A tree
+unfolds isometrically whatever its shape.
+
+What can still go wrong is the net colliding with itself somewhere far from
+where it branched, and that cuts across the path/branching line rather than
+along it: on the icosahedron, 1985 branching caps lay out clean against 215
+that do not, and 338 path caps against 22 that do not. Being a strip is
+neither necessary for a flat net nor sufficient for one. hardware/scripts/
+check_unfold.py lays every net out and measures it; this file only counts
+shapes.
 
 The counts agree with the literature where it has an opinion: 30 Hamiltonian
 cycles on the dodecahedron (Hamilton's own icosian game) and 2560 directed,

@@ -50,9 +50,11 @@ something we already intend to change.
    does not yet explain why a drawn cut is or is not printable.** It warns
    that the files belong to the shipped cycle and offers a way back, which
    is honest but not yet useful. Making it useful needs `is_strip` in
-   JavaScript — each cap's face adjacency being a path rather than a
-   branching tree — which is a small function that today only exists in
-   `census.py`.
+   JavaScript. Note that the right test is **not** the strip test: it is
+   whether each cap's net lays out without overlapping itself, which is a
+   different and stronger question — see *What we know*. The strip test
+   answers "does the printed ladder fit this cut", which is also worth
+   saying, but it is a second question and not a substitute for the first.
 5. **The unfold.** The Make it tab's main area becomes a canvas, and the
    solid unfolds into its two flat strips.
 
@@ -180,9 +182,32 @@ automorphism group (Whitney).
 | dodecahedron | 120 | 30 | 1 | 30 | 1 |
 | icosahedron | 120 | 1280 | 17 | 90 | 2 |
 
-A cap unfolds flat as one strip exactly when its faces form a **path**. If
-they form a branching tree there is no single chain to roll out. That test
-is what collapses the icosahedron's 17 forms to 2.
+A cap's faces form a **path** — a strip — or a branching tree. That test is
+what collapses the icosahedron's 17 forms to 2, and it is what the printed
+part needs, because the part is a linear ladder of faces on living hinges.
+
+It is **not** a test for lying flat, although this file and `census.py` both
+used to say it was. Every cap of every Hamiltonian cycle lies flat. A cycle
+puts two cut edges at every vertex, so the fan of faces around each vertex is
+broken into an arc and no cap ever closes a wheel — no cap has an interior
+vertex, and for a disc a dual cycle is exactly what encircles one, so the dual
+is always a tree rather than merely connected. A tree rolls out isometrically
+whatever its shape.
+
+What can still go wrong is the net **colliding with itself** far from where it
+branched, and that cuts across the path/branching line rather than along it:
+
+| icosahedron caps | lay out clean | self-overlap |
+|---|---:|---:|
+| path-shaped | 338 | 22 |
+| branching | 1985 | 215 |
+
+15 of those 22 belong to cycles whose *both* caps are strips. So being a strip
+is neither necessary for a flat net nor sufficient for one, and the only
+honest test is to lay the net out and measure it — which is what
+`hardware/scripts/check_unfold.py` does. On the icosahedron the collisions are
+exact rather than marginal, because equilateral triangles roll out onto the
+triangular lattice and two cells either coincide or miss entirely.
 
 The cut we ship is, on every solid, one whose two halves are **congruent** —
 which is what lets a single STL be printed twice. On the icosahedron that
