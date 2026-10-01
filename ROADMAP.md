@@ -35,10 +35,24 @@ something we already intend to change.
    as an answer. The seam still runs through it, so the cut is visible and
    only the verdict is withheld. Its legend collapses to a single row, since
    two swatches of one colour name nothing.
-4. **Drawing the cycle.** Drag across vertices in the Diagram tab; the solid
-   splits when the loop closes. Brings with it the "Make it" explanation of
-   why a given cut is or is not printable, which cannot be tested before
-   then because until now every cut has been the good one.
+4. ~~**Drawing the cycle.**~~ *(the drawing itself is done)* Drag across
+   vertices in the Diagram tab, or click them one at a time; retracing onto
+   the previous vertex steps back. Legal next vertices are marked, because
+   that is the board rather than the move — but vertices that have become
+   *unreachable* are deliberately not marked, since getting stranded is the
+   whole lesson. When the loop closes the solid re-splits along it: the
+   partition, the caps, the stats and the census all fall out of the code
+   that already read the shipped cycle. While a line is open the caps go
+   neutral and the old seam is hidden, because until it closes there is no
+   cut and the one on screen belongs to the cycle being replaced.
+
+   Still to come, and the reason this step is only half done: **"Make it"
+   does not yet explain why a drawn cut is or is not printable.** It warns
+   that the files belong to the shipped cycle and offers a way back, which
+   is honest but not yet useful. Making it useful needs `is_strip` in
+   JavaScript — each cap's face adjacency being a path rather than a
+   branching tree — which is a small function that today only exists in
+   `census.py`.
 5. **The unfold.** The Make it tab's main area becomes a canvas, and the
    solid unfolds into its two flat strips.
 
@@ -88,6 +102,20 @@ current ladder is test-printed; 80-100mm rungs want a test print before they
 are offered.
 
 ## Later
+
+- **The lights over-drive the brightest faces.** Measured on the icosahedron:
+  the red cap renders at `(255, 94, 86)` — the red channel pinned, so the
+  measured saturation falls from 0.66 to 0.51 purely because the channel has
+  no room left. It clips on the *solid*, not only in the diagram; the old
+  half-opacity fill was pulling the diagram back under the ceiling and hiding
+  it. The cube does not clip, because its faces sit at angles that never face
+  both key lights at once. The fix is to scale each palette's `amb`/`k1`/`k2`
+  so the worst case lands just under 255 — about 0.87× for standard — but it
+  retunes a look that has been adjusted by eye for a long time, so it wants
+  doing deliberately rather than in passing.
+- **The plain palette reads brighter than "plain" should.** `0x9ba3b0` lit
+  face-on comes out close to white, which is clean but not boring. One
+  constant, whenever the mood is right for it.
 
 - **Tutte pins the view face to a *regular* polygon, which is arbitrary.**
   Pinning it to the face's own shape is more correct in general. It changes

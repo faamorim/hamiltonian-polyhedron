@@ -119,6 +119,20 @@
   }
   .row{ display:flex; justify-content:space-between; align-items:center; }
   .value{ font-variant-numeric:tabular-nums; color:var(--accent); font-size:0.85rem; }
+  #drawStatus{
+    font-size:0.76rem; line-height:1.5; color:var(--text-dim);
+    margin:2px 0 8px; min-height:2.3em;
+  }
+  #drawStatus.bad{ color:#e0896b; }
+  #drawStatus.good{ color:var(--accent); }
+  #drawButtons{ gap:8px; }
+  #drawButtons button{
+    flex:1; font:inherit; font-size:0.78rem; padding:6px 4px; cursor:pointer;
+    color:var(--text); background:rgba(22,25,38,0.72);
+    border:1px solid var(--panel-border); border-radius:6px;
+  }
+  #drawButtons button:hover:not(:disabled){ border-color:var(--accent); }
+  #drawButtons button:disabled{ opacity:0.4; cursor:default; }
   #legend{ font-size:0.82rem; line-height:1.5; }
   #legend .swatch{
     display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:6px;
@@ -141,6 +155,21 @@
     border-top:1px solid var(--panel-border);
     font-size:0.76rem; line-height:1.55;
   }
+  #drawnWarning{
+    margin:0 0 18px; padding:12px 14px; max-width:860px;
+    font-size:0.82rem; line-height:1.55; color:var(--text-dim);
+    border:1px solid #6b4a2e; border-left-width:3px; border-radius:6px;
+    background:rgba(90,58,30,0.18);
+  }
+  #drawnWarning[hidden]{ display:none; }
+  #drawnWarning b{ color:#e8a87c; display:block; margin-bottom:4px; }
+  #drawnRevert{
+    display:block; margin-top:10px; font:inherit; font-size:0.78rem;
+    padding:6px 12px; cursor:pointer; color:var(--text);
+    background:rgba(22,25,38,0.72);
+    border:1px solid var(--panel-border); border-radius:6px;
+  }
+  #drawnRevert:hover{ border-color:var(--accent); }
   #downloadList{
     font-size:0.8rem; color:var(--text-dim); line-height:1.5;
     display:grid; gap:10px 14px; max-width:860px;
@@ -223,6 +252,15 @@
            a slider because the hinge is a fixed thickness in millimetres while
            the faces scale &mdash; each rung is generated and checked at its own
            size.</p>
+        <div id="drawnWarning" hidden>
+          <b>These files are for the original cut, not the one you drew.</b>
+          Every STL and PDF here was generated and checked offline against the
+          cycle this page ships with. Your cycle splits the solid on screen,
+          but nothing has folded it, measured the overlap, or confirmed it
+          comes apart as two printable strips &mdash; so offering you a file
+          for it would be a guess wearing a checked file's clothes.
+          <button type="button" id="drawnRevert">Back to the original cut</button>
+        </div>
         <div id="downloadList"></div>
       </div>
     </div>
@@ -268,6 +306,14 @@
       <div class="field checkbox-row" data-tabs="solid">
         <input type="checkbox" id="followSeam">
         <label for="followSeam" style="margin:0; text-transform:none; letter-spacing:normal;">Camera follows the seam</label>
+      </div>
+      <div class="field" id="drawField" data-tabs="diagram">
+        <label>Draw your own cycle</label>
+        <div id="drawStatus">Drag from any vertex. Blue marks where you may go next.</div>
+        <div class="row" id="drawButtons">
+          <button type="button" id="drawUndo" disabled>Undo</button>
+          <button type="button" id="drawReset" disabled>Original cut</button>
+        </div>
       </div>
       <div id="legend" data-tabs="solid diagram">
         <div id="legendA"><span class="swatch" style="background:var(--groupA)"></span><span id="legendAText">Cap A</span></div>
@@ -582,6 +628,14 @@
   var currentDirections = null;
   var currentSeam = null;
   var currentMorph = null; // the flattening: where every vertex starts and ends
+  // A cycle the reader drew, which stands in for the shipped one everywhere
+  // until they reset it. Null means "use the solid's own". It is cleared
+  // whenever the solid changes, because a list of vertex indices means
+  // nothing against a different solid's numbering -- which is the exact
+  // failure polyhedra.js was created to stop.
+  var drawnCycle = null;
+  var drawPath = [];       // what is being drawn right now, vertex by vertex
+  var lockedViewFace = -1; // the diagram holds still while it is drawn on
   var morphT = 0;          // 0 = the solid, 1 = the Schlegel diagram
   var morphTarget = 0;     // what it is heading for
   var MORPH_SECONDS = 3.8;
@@ -773,7 +827,7 @@
     // How bright the wash is along each edge of the outline: full where the
     // cycle does not run, dim where it does. See HALO_JOIN.
     var onCycle = {};
-    var cyc = currentMorph.data.cycle;
+    var cyc = cycleOf(currentMorph.data);
     for (var ci = 0; ci < cyc.length; ci++){
       onCycle[edgeKey(cyc[ci], cyc[(ci + 1) % cyc.length])] = true;
     }
@@ -843,11 +897,167 @@
   // from would have -- same grey, same lerp, same cut(). See applyFaces.
   function paintHalo(){
     if (!halo || !currentMorph || currentMorph.viewCap === undefined) return;
-    halo.material.color.setHex(NEUTRAL).lerp(
-      _cap.setHex(PALETTES[paletteName].caps[currentMorph.viewCap]),
-      cut(currentMorph.viewPaintAt));
+    halo.material.color.setHex(NEUTRAL);
+    if (!(drawPath.length > 0 && !drawComplete())){
+      halo.material.color.lerp(
+        _cap.setHex(PALETTES[paletteName].caps[currentMorph.viewCap]),
+        cut(currentMorph.viewPaintAt));
+    }
     document.documentElement.style.setProperty(
       "--outer", "#" + halo.material.color.getHexString());
+  }
+
+  // ---- drawing a cycle on the diagram ----------------------------------
+  //
+  // The diagram is the one view where a Hamiltonian cycle is a thing you can
+  // trace with a finger, so this is where it becomes something the reader
+  // DOES rather than something they are shown. The left button is free here:
+  // the orbit is handed back only on the solid, so a drag in the diagram has
+  // nothing else to mean.
+  //
+  // What the page helps with, and what it does not, is a deliberate line.
+  // It marks which vertices are a legal next step, because that is the
+  // board, not the move -- a reader cannot be expected to work out the
+  // adjacency of a graph they are looking at through a projection. It does
+  // NOT mark the vertices that have become unreachable. Getting stranded
+  // with four vertices left and nowhere to go is the whole lesson about
+  // Hamiltonicity, and a page that prevents it teaches nothing.
+  var DRAW_HIT = 26;       // px: how near the pointer must come to a vertex
+  var PEN = 0xffe066;      // what the reader draws with
+  var HINT = 0x6fd0ff;     // where they are allowed to go next
+  var drawPools = null;
+
+  function vertexAdjacency(data){
+    var adj = [];
+    for (var i = 0; i < data.vertices.length; i++) adj.push([]);
+    data.faces.forEach(function(f){
+      for (var k = 0; k < f.length; k++){
+        var a = f[k], b = f[(k + 1) % f.length];
+        if (adj[a].indexOf(b) < 0) adj[a].push(b);
+        if (adj[b].indexOf(a) < 0) adj[b].push(a);
+      }
+    });
+    return adj;
+  }
+
+  function dropDrawPools(){
+    if (!drawPools) return;
+    drawPools.all.forEach(function(m){ scene.remove(m); });
+    // The geometries are cylGeo and sphereGeo, shared with the seam and not
+    // ours to dispose. The two materials are.
+    drawPools.penMat.dispose();
+    drawPools.hintMat.dispose();
+    drawPools = null;
+  }
+
+  // One tube and one dot per vertex, plus a hint dot per vertex, made once
+  // and moved every frame -- the same bargain the seam strikes, for the same
+  // reason: the path changes shape constantly and rebuilding geometry on
+  // every pointer move would be the one expensive thing in the loop.
+  function buildDrawPools(n){
+    dropDrawPools();
+    var tubes = [], dots = [], hints = [], all = [];
+    // Both transparent, although the pen is fully opaque, for the reason the
+    // cap materials carry the same flag: the flag picks the PASS. Opaque
+    // geometry is drawn before any transparent geometry, and renderOrder only
+    // sorts within a pass -- so an opaque pen is drawn before the faces it is
+    // meant to sit on and they paint straight over it, whatever its
+    // renderOrder and whether or not it depth-tests. Marked transparent it
+    // joins the pass the surface is in, where renderOrder 3 puts it last.
+    var penMat = new THREE.MeshBasicMaterial({ color: PEN,
+      transparent: true, opacity: 1, depthWrite: false });
+    var hintMat = new THREE.MeshBasicMaterial({ color: HINT,
+      transparent: true, opacity: 0.85, depthWrite: false });
+    for (var i = 0; i < n; i++){
+      var t = new THREE.Mesh(cylGeo, penMat);
+      var d = new THREE.Mesh(sphereGeo, penMat);
+      var h = new THREE.Mesh(sphereGeo, hintMat);
+      // Over the surface it is drawn on, and never hidden by it.
+      [t, d, h].forEach(function(m){
+        m.renderOrder = 3; m.material.depthTest = false; m.visible = false;
+        scene.add(m); all.push(m);
+      });
+      tubes.push(t); dots.push(d); hints.push(h);
+    }
+    drawPools = { tubes: tubes, dots: dots, hints: hints, all: all,
+                  penMat: penMat, hintMat: hintMat };
+  }
+
+  // Is this a legal next vertex? Adjacent to where we are, and either unused
+  // or -- when every vertex has been visited -- the start, which closes it.
+  function canStep(vi){
+    if (!currentMorph) return false;
+    if (!drawPath.length) return true;
+    var end = drawPath[drawPath.length - 1];
+    if (currentMorph.adj[end].indexOf(vi) < 0) return false;
+    if (drawPath.indexOf(vi) < 0) return true;
+    return vi === drawPath[0] && drawPath.length === currentMorph.data.vertices.length;
+  }
+
+  function legalNext(){
+    if (!currentMorph) return [];
+    if (!drawPath.length) return [];
+    var end = drawPath[drawPath.length - 1];
+    return currentMorph.adj[end].filter(canStep);
+  }
+
+  function drawComplete(){
+    return currentMorph && drawPath.length === currentMorph.data.vertices.length
+      && currentMorph.adj[drawPath[drawPath.length - 1]].indexOf(drawPath[0]) >= 0;
+  }
+
+  // Put the pools where the path currently is. Everything is read from the
+  // live positions, so the drawing survives anything the view does to it.
+  function applyDraw(){
+    if (!drawPools || !currentMorph) return;
+    // Nothing once the loop has closed: adopting it rebuilds the solid along
+    // it, so the seam IS the drawing now. Leaving the pen up would draw every
+    // edge twice, in two colours, saying the same thing.
+    var on = currentTab === "diagram" && morphT > 0.98 && !drawComplete();
+    var P = livePositions();
+    var r = SEAM_R * seamWidth * 0.45 * 1.25;   // a shade over the seam's own
+    var hintR = r * 1.1;
+    drawPools.tubes.forEach(function(t, k){
+      t.visible = on && k < drawPath.length - 1;
+      if (!t.visible) return;
+      var a = P[drawPath[k]], b = P[drawPath[k + 1]];
+      _d.subVectors(b, a);
+      t.position.copy(a).addScaledVector(_d, 0.5);
+      t.scale.set(r, _d.length(), r);
+      t.quaternion.setFromUnitVectors(UP, _d.clone().normalize());
+    });
+    drawPools.dots.forEach(function(d, k){
+      d.visible = on && k < drawPath.length;
+      if (!d.visible) return;
+      d.position.copy(P[drawPath[k]]);
+      d.scale.setScalar((r / SEAM_R) * 1.05);
+    });
+    var hints = on ? legalNext() : [];
+    drawPools.hints.forEach(function(h, k){
+      h.visible = k < hints.length;
+      if (!h.visible) return;
+      h.position.copy(P[hints[k]]);
+      h.scale.setScalar(hintR / SEAM_R);
+    });
+  }
+
+  // The vertex nearest the pointer, in screen space, if any is near enough.
+  // Generous on purpose -- the trapezohedron's closest pair is about 38px on
+  // an 800px canvas, so the radius has to stay under half of that to stay
+  // unambiguous, and nearest-wins settles the rest.
+  function vertexAt(px, py){
+    if (!currentMorph) return -1;
+    var rect = renderer.domElement.getBoundingClientRect();
+    var P = livePositions();
+    var best = -1, bestD = DRAW_HIT * DRAW_HIT;
+    P.forEach(function(p, i){
+      var q = p.clone().project(camera);
+      var x = (q.x * 0.5 + 0.5) * rect.width;
+      var y = (-q.y * 0.5 + 0.5) * rect.height;
+      var d = (x - px) * (x - px) + (y - py) * (y - py);
+      if (d < bestD){ bestD = d; best = i; }
+    });
+    return best;
   }
 
   // Which way up to hold the diagram -- the nearest way, not the canonical one.
@@ -894,6 +1104,15 @@
   function replan(){
     if (!currentMorph) return;
     var pick = pickViewFace();
+    // Unless the reader is drawing on it. Picking the nearest face is right
+    // when the diagram is something they are being SHOWN; it is wrong the
+    // moment it is something they are working on, because adopting a drawn
+    // cycle rebuilds the scene and the picture would jump to a different
+    // outer face mid-stroke. The angle it was opened at is theirs until
+    // they reset it.
+    if (lockedViewFace >= 0 && lockedViewFace < currentMorph.normals.length){
+      pick = { face: lockedViewFace, angle: pick.angle };
+    }
     var plan = planFlatten(currentMorph.data, currentMorph.base, pick.face);
     if (!plan){ currentMorph.canFlatten = false; return; }
     currentMorph.flat = plan.flat;
@@ -929,17 +1148,24 @@
     applySeam();                  // nothing is animating, so nobody else will
   }
 
+  // The cycle in force: what the reader drew, or what the solid shipped.
+  function cycleOf(data){
+    return (drawnCycle && drawnCycle.length === data.vertices.length)
+      ? drawnCycle : data.cycle;
+  }
+
   function buildShape(key){
     clearScene();
     var data = POLYHEDRA[key];
     if (!data || !data.available) return;
+    var cycle = cycleOf(data);
 
     var positions = data.vertices.map(function(v){ return new THREE.Vector3(v[0], v[1], v[2]); });
     var maxRadius = positions.reduce(function(m, p){ return Math.max(m, p.length()); }, 0);
     var scale = TARGET_RADIUS / maxRadius;
     positions.forEach(function(p){ p.multiplyScalar(scale); });
 
-    var partition = computeFacePartition(data.faces, data.cycle);
+    var partition = computeFacePartition(data.faces, cycle);
     var compOf = partition.compOf;
 
     // When in the walk each cycle edge is finished, so a face can be told
@@ -947,8 +1173,8 @@
     // edges the walk cuts; a face the cycle never touches -- none of ours,
     // but the rule has to say something -- waits until the loop closes.
     var edgeStep = {};
-    for (var c = 0; c < data.cycle.length; c++){
-      edgeStep[edgeKey(data.cycle[c], data.cycle[(c + 1) % data.cycle.length])] = c + 1;
+    for (var c = 0; c < cycle.length; c++){
+      edgeStep[edgeKey(cycle[c], cycle[(c + 1) % cycle.length])] = c + 1;
     }
 
     var posArrays = [[], []];
@@ -970,7 +1196,7 @@
       centroidSum[g].add(faceCentroid);
       faceCounts[g]++;
 
-      var paintAt = data.cycle.length;
+      var paintAt = cycle.length;
       for (var k = 0; k < face.length; k++){
         var st = edgeStep[edgeKey(face[k], face[(k + 1) % face.length])];
         if (st !== undefined) paintAt = Math.min(paintAt, st);
@@ -1091,11 +1317,11 @@
       // it sits, which way it points, how long it is -- is worked out from
       // the live positions each frame, which is what lets the whole solid
       // be somewhere else entirely by the next one.
-      data.cycle.forEach(function(vi, k){
+      cycle.forEach(function(vi, k){
         var tube = new THREE.Mesh(cylGeo, seamMat);
         container.add(tube);
         seamEdges.push({ mesh: tube, va: vi,
-                         vb: data.cycle[(k + 1) % data.cycle.length],
+                         vb: cycle[(k + 1) % cycle.length],
                          step: k, shrink: shrink });
 
         var dot = new THREE.Mesh(sphereGeo, dotMat);
@@ -1204,8 +1430,13 @@
         return n;
       }),
       viewMats: viewMats, viewFace: -1,
+      // Which vertices each vertex is joined to, so the drawing can tell a
+      // legal step from an impossible one. Built from the faces, which is
+      // the same place every other edge in the page comes from.
+      adj: vertexAdjacency(data),
       inlays: inlays, canFlatten: false
     };
+    buildDrawPools(data.vertices.length);
     // Plan once now, for wherever the camera happens to be, so the tickbox
     // knows whether this solid has a diagram at all and a rebuild that
     // arrives already flat has something to arrive at. It is planned again
@@ -1215,14 +1446,15 @@
     currentGroups = groups;
     currentDirections = directions;
     currentSeam = { edges: seamEdges, dots: seamDots, runners: seamRunners,
-                    steps: data.cycle.length, verts: data.cycle,
-                    path: data.cycle.map(function(vi){ return positions[vi].clone(); }) };
+                    steps: cycle.length, verts: cycle,
+                    path: cycle.map(function(vi){ return positions[vi].clone(); }) };
     currentFaces = { buffers: faceBuffers, inlays: inlays };
     traceT = 0;
     lastShapeT = -1;             // new geometry: nothing has been written yet
     applySeparation(currentSeparation);
     applySeam();
     applyFaces();
+    applyDraw();
     restoreFlatView();
     applyMorph();
     // A solid the page cannot flatten does not get the tab offered.
@@ -1231,7 +1463,7 @@
     document.getElementById("stats").innerHTML =
       "<b>" + data.vertices.length + "</b> vertices &middot; " +
       "<b>" + data.faces.length + "</b> faces &middot; " +
-      "<b>" + data.cycle.length + "</b>-edge cycle<br>" +
+      "<b>" + cycle.length + "</b>-edge cycle<br>" +
       "Cap A: <b>" + faceCounts[0] + "</b> faces, " + data.vertices.length + " vertices<br>" +
       "Cap B: <b>" + faceCounts[1] + "</b> faces, " + data.vertices.length + " vertices" +
       censusLine(data);
@@ -1407,6 +1639,12 @@
     // DOT_R / SEAM_R times the tube -- 1.71, the ratio the solid has always
     // shown at the default -- at every thickness and in both views.
     var dotScale = r / SEAM_R;
+    // The cut being replaced gets out of the way. A line being drawn is the
+    // same kind of object as the seam, in nearly the same colour, so leaving
+    // the old one up means the reader's own stroke is lost inside a finished
+    // loop that is louder than it and no longer true. The faces have already
+    // gone neutral for the same reason; this is the rest of that sentence.
+    if (drawPath.length > 0 && !drawComplete()) r = 0;
     var P = livePositions();
     currentSeam.edges.forEach(function(e){
       var grown = tracing ? Math.min(1, Math.max(0, traceT - e.step)) : 1;
@@ -1540,6 +1778,11 @@
   function applyFaces(){
     if (!currentFaces) return;
     var caps = PALETTES[paletteName].caps;
+    // A line being drawn is not yet a cut. Until it closes there is no
+    // partition to colour by -- the one on screen belongs to the cycle being
+    // replaced -- so the surface goes back to neutral and the drawing is the
+    // only claim the page is making.
+    var pending = drawPath.length > 0 && !drawComplete();
     currentFaces.buffers.forEach(function(buf){
       var arr = buf.attr.array;
       _cap.setHex(caps[buf.cap]);
@@ -1550,7 +1793,8 @@
         // than at the instant the cut finishes. The claim is that the cycle
         // SPLITS the solid, and a colour that arrives with the blade says
         // that; one that snaps on afterwards only reports it.
-        _c.setHex(NEUTRAL).lerp(_cap, cut(span.paintAt));
+        _c.setHex(NEUTRAL);
+        if (!pending) _c.lerp(_cap, cut(span.paintAt));
         for (var i = span.start; i < span.start + span.count; i++){
           arr[i * 3] = _c.r; arr[i * 3 + 1] = _c.g; arr[i * 3 + 2] = _c.b;
         }
@@ -1622,7 +1866,15 @@
   select.value = "icosahedron";
   select.addEventListener("change", function(){
     currentKey = select.value;
+    // A drawn cycle is a list of vertex NUMBERS, and those number a
+    // particular solid. Carrying it across would be the same class of
+    // mistake polyhedra.js exists to prevent: an index list that still
+    // parses against the next solid and means something else entirely.
+    drawPath = [];
+    drawnCycle = null;
+    lockedViewFace = -1;
     buildShape(currentKey);
+    drawRefresh();
     showDownloads(currentKey);
     writeHash();
   });
@@ -1733,6 +1985,7 @@
     // back up -- quietly, since the canvas is hidden -- and the reader finds
     // it whole when they return.
     setFlattened(name === "diagram");
+    if (typeof drawRefresh === "function") drawRefresh();
     writeHash();
   }
 
@@ -1799,6 +2052,153 @@
 
   // Back to where the page opened. Only offered on the Solid tab: the Diagram
   // frames itself, and there is nothing to orbit on Make it.
+  // ---- the drawing, as the reader drives it -----------------------------
+  var drawStatus = document.getElementById("drawStatus");
+  var drawUndoBtn = document.getElementById("drawUndo");
+  var drawResetBtn = document.getElementById("drawReset");
+
+  var drawnWarning = document.getElementById("drawnWarning");
+  document.getElementById("drawnRevert")
+    .addEventListener("click", function(){ drawClear(true); });
+
+  function drawSay(text, cls){
+    drawStatus.textContent = text;
+    drawStatus.className = cls || "";
+    drawUndoBtn.disabled = drawPath.length === 0;
+    drawResetBtn.disabled = drawPath.length === 0 && !drawnCycle;
+    // Make it describes files that exist on disk, generated and checked
+    // against the shipped cycle. A drawn cycle does not have any, and a page
+    // that quietly let the reader download the old one's STL while showing
+    // them their own cut would be wrong in the one place it costs filament.
+    drawnWarning.hidden = !drawnCycle;
+  }
+
+  function drawRefresh(){
+    if (!currentMorph) return;
+    var n = currentMorph.data.vertices.length;
+    // The caps are coloured for the cut being replaced. Grey them while a
+    // line is open: until it closes there is no cut, and the old one's
+    // answer sitting under a new one being drawn is the page contradicting
+    // itself. This has to run on every change rather than on the first
+    // vertex -- "is a line open" is false at the moment the first one is
+    // placed, because it is placed after the question is asked.
+    applyFaces();
+    applySeam();
+    if (!drawPath.length){
+      drawSay(drawnCycle
+        ? "Showing your cycle. Drag from any vertex to draw another."
+        : "Drag from any vertex. Blue marks where you may go next.");
+    } else if (drawComplete()){
+      drawSay("Closed, and every vertex visited once \u2014 this is your cut.", "good");
+    } else if (drawPath.length === n){
+      // Every vertex once, but the ends do not meet. A Hamiltonian PATH,
+      // which is a different and easier thing, and worth naming as such --
+      // this is the near miss the whole problem is made of.
+      drawSay("All " + n + " visited, but the last does not join the first. " +
+              "That is a Hamiltonian path, not a cycle.", "bad");
+    } else if (!legalNext().length){
+      var left = n - drawPath.length;
+      drawSay("Stuck: nowhere legal to go, with " + left +
+              (left === 1 ? " vertex" : " vertices") +
+              " unvisited. That is what makes these hard to find.", "bad");
+    } else {
+      drawSay(drawPath.length + " of " + n + " vertices. " +
+              (drawPath.length === n - 1
+                 ? "One to go, then close the loop."
+                 : "Keep going, then close the loop."));
+    }
+    applyDraw();
+  }
+
+  // Take one step, if it is a legal one. Stepping back onto the vertex
+  // before the current end undoes instead, which is what a finger expects
+  // when it retraces its own line.
+  function drawStep(vi){
+    if (vi < 0 || !currentMorph) return;
+    if (drawPath.length > 1 && vi === drawPath[drawPath.length - 2]){
+      drawPath.pop();
+      drawRefresh();
+      return;
+    }
+    if (drawComplete() || !canStep(vi)) return;
+    // The first vertex locks the view, because adopting the finished cycle
+    // rebuilds the scene and an unlocked diagram would re-pick its outer
+    // face and redraw itself around the reader's half-finished line.
+    if (!drawPath.length) lockedViewFace = currentMorph.viewFace;
+    drawPath.push(vi);
+    if (drawComplete()) adoptDrawn();
+    else drawRefresh();
+  }
+
+  // A closed loop through every vertex is a Hamiltonian cycle, so the solid
+  // can simply be rebuilt along it -- the partition, the strips, the census
+  // line and the printable files all fall out of the same code that has
+  // always read the shipped one.
+  function adoptDrawn(){
+    drawnCycle = drawPath.slice();
+    var keep = drawPath.slice();
+    buildShape(currentKey);
+    drawPath = keep;
+    drawRefresh();
+  }
+
+  function drawUndo(){
+    if (!drawPath.length) return;
+    drawPath.pop();
+    if (!drawPath.length) lockedViewFace = -1;
+    if (drawnCycle){ drawnCycle = null; var k = drawPath.slice();
+                     buildShape(currentKey); drawPath = k; }
+    applyFaces();
+    drawRefresh();
+  }
+
+  function drawClear(rebuild){
+    drawPath = [];
+    lockedViewFace = -1;
+    var had = drawnCycle;
+    drawnCycle = null;
+    if (had && rebuild !== false) buildShape(currentKey);
+    applyFaces();
+    drawRefresh();
+  }
+
+  drawUndoBtn.addEventListener("click", drawUndo);
+  drawResetBtn.addEventListener("click", function(){ drawClear(true); });
+
+  // Pointer. The left button has nothing else to do in the diagram -- the
+  // orbit is handed back only on the solid -- so a drag here is a stroke.
+  // A press that lands on no vertex is not a stroke at all, which keeps a
+  // stray drag from starting a line the reader did not mean to begin.
+  var penDown = false;
+  function drawPointer(ev, pressing){
+    if (currentTab !== "diagram" || morphT < 0.98) return;
+    var rect = renderer.domElement.getBoundingClientRect();
+    var vi = vertexAt(ev.clientX - rect.left, ev.clientY - rect.top);
+    if (vi < 0) return;
+    if (pressing && !penDown) return;
+    drawStep(vi);
+  }
+  renderer.domElement.addEventListener("pointerdown", function(ev){
+    if (ev.button !== 0 || currentTab !== "diagram" || morphT < 0.98) return;
+    var rect = renderer.domElement.getBoundingClientRect();
+    if (vertexAt(ev.clientX - rect.left, ev.clientY - rect.top) < 0) return;
+    penDown = true;
+    renderer.domElement.setPointerCapture(ev.pointerId);
+    drawPointer(ev, false);
+    ev.preventDefault();
+  });
+  renderer.domElement.addEventListener("pointermove", function(ev){
+    if (!penDown) return;
+    drawPointer(ev, true);
+  });
+  ["pointerup", "pointercancel"].forEach(function(t){
+    renderer.domElement.addEventListener(t, function(ev){
+      if (!penDown) return;
+      penDown = false;
+      try { renderer.domElement.releasePointerCapture(ev.pointerId); } catch (e) {}
+    });
+  });
+
   document.getElementById("resetView").addEventListener("click", function(){
     if (currentTab === "diagram"){ showTab("solid"); return; }
     // Spend the momentum before resetting, or the reset gets undone.
@@ -2065,6 +2465,7 @@
       morphT += Math.min(step, Math.abs(goal - morphT)) * (goal > morphT ? 1 : -1);
       applyMorph();
       applySeam();
+      applyDraw();           // it rides the vertices, wherever they are
     } else if (sepMoved){
       applyMorph();          // the controls' state depends on the gap too
     }
