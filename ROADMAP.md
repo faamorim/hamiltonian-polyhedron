@@ -25,6 +25,51 @@ something we already intend to change.
 5. **The unfold.** The Make it tab's main area becomes a canvas, and the
    solid unfolds into its two flat strips.
 
+## The printed part is built to one person's constraints
+
+Raised by the first outside user: he has a bigger printer than the A1 Mini the
+ladder was tuned for, did not want magnets, and did not want the inlay pockets
+— and the STL gives him all three whether he likes them or not.
+
+- **A plain variant, and taller rungs.** Nearly free, because the generator
+  already anticipated it: `SOCKET_FITS` gates the sockets, the keys, the
+  placements *and* the wall height (with no sockets the rim drops back to its
+  minimum, so the part gets better rather than merely stripped), and
+  `INLAY_FACES` is documented in the source as "the whole switch" — it takes
+  `"ends"` or `"all"` and wants a `"none"`. The ladder is a loop, and an STL's
+  size is triangle count rather than millimetres, so taller rungs cost nothing
+  and a plain part costs less.
+- **A parametric hinge.** `HINGE_THICKNESS` is one constant, and the right
+  value depends on the filament and the size — PLA at 25mm and PETG at 100mm
+  do not want the same skin. Worth exposing rather than deciding for people.
+  Note `HINGE_GAP_PER_RAD` and `MIN_HINGE_GAP` are tied to it: the gap has to
+  grow with the thickness or the walls collide before the fold closes, so this
+  is a parameter with a *check*, not a free number.
+- **Emit a parametric `.scad`.** The computed strip as `polyhedron()` data,
+  the features as parameters at the top. Hands the magnet-dimension problem to
+  the people who have opinions about it, for the cost of one generator.
+- **Generate in the browser, with manifold3d's WASM build.** The honest
+  long-term answer. Prebuilding does not scale — 6 solids x 5 sizes x magnets
+  x inlays is 120 files, and that is before magnet *diameter*, which is
+  continuous and cannot be enumerated at all. manifold3d is the same library
+  the Python already uses, so this is porting our 1124 lines onto the same
+  kernel rather than reimplementing a CSG engine. And `check_fold` is itself
+  manifold operations, so **the verification travels with the generator**: the
+  page could fold both halves, measure the overlap and refuse to hand over a
+  file that fails — checking the exact bytes the user receives, which is
+  better than today, where we verify a representative set and ship those.
+
+  This supersedes the "migrating the generators to JavaScript" entry below in
+  one respect: the argument that the checks must be able to fail a build was
+  weaker than it was stated. It still holds for the *build* — artefacts in the
+  repo should stay verified offline — but it is not an argument against the
+  page also being able to generate.
+
+**Untested physical claim:** the hinge is a fixed thickness in millimetres, so
+a much larger model puts proportionally more load on the same hinge. The
+current ladder is test-printed; 80-100mm rungs want a test print before they
+are offered.
+
 ## Later
 
 - **Tutte pins the view face to a *regular* polygon, which is arbitrary.**
