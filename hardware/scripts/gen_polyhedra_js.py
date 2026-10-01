@@ -18,6 +18,7 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import census
 import polyhedra as P
 
 ORDER = ["tetrahedron", "cube", "octahedron", "trapezohedron",
@@ -35,6 +36,13 @@ def num(x):
     return repr(round(v, 12))
 
 
+def census_js(c):
+    """How many ways this solid can be cut, counted by census.py."""
+    return ("{" + ", ".join(
+        f"{k}: {str(v).lower() if isinstance(v, bool) else v}"
+        for k, v in c.items()) + "}")
+
+
 def main():
     assert set(ORDER) == set(P.SOLIDS), "gen_polyhedra_js: ORDER is out of date"
     lines = [
@@ -45,6 +53,11 @@ def main():
         "// exactly once, every step of it being a real edge, and every face",
         "// being planar. The page and the printed files therefore describe the",
         "// same cut -- they did not always, and nothing said so.",
+        "//",
+        "// Each one also carries its census: how many Hamiltonian cycles it",
+        "// has, how many of those are essentially different, how many fold",
+        "// into two strips, and whether the cut shipped here has congruent",
+        "// halves. See hardware/scripts/census.py.",
         "window.POLYHEDRA_DATA = {",
     ]
     for key in ORDER:
@@ -58,7 +71,8 @@ def main():
             f'    label: {s.label!r},'.replace("'", '"'),
             f'    vertices: [{verts}],',
             f'    faces: [{faces}],',
-            f'    cycle: [{",".join(str(i) for i in s.cycle)}]',
+            f'    cycle: [{",".join(str(i) for i in s.cycle)}],',
+            f'    census: {census_js(census.census(s))}',
             '  },',
         ]
     lines.append("};")

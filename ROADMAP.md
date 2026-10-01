@@ -8,16 +8,25 @@ turned down, so it does not get relitigated.
 In this order. Each step is chosen so the one after it is not built on
 something we already intend to change.
 
-1. **One source for the polyhedra.** `polyhedra.py` is canonical and
-   self-verifying; the page reads a generated `polyhedra.js`. *(in progress)*
-2. **Tabs.** Solid · Diagram · Make it. Per-tab sidebar, which retires the
-   greying-out. Downloads move from the 280px sidebar into the main area.
-   Trace and paint become separate controls, camera-follow stays a sibling
-   rather than a child. Reset view in a canvas corner. URL state
-   (`#solid/tab/palette`) folded in here rather than retrofitted.
-3. **Colour in the diagram.** The two caps filled, and the outer region
-   tinted in its cap's colour — see *the outer face* below. A census line
-   under the stats.
+1. ~~**One source for the polyhedra.**~~ *(done)* `polyhedra.py` is canonical
+   and self-verifying; the page reads a generated `polyhedra.js`.
+2. ~~**Tabs.**~~ *(done)* Solid · Diagram · Make it. Per-tab sidebar, which
+   retired the greying-out. Downloads moved from the 280px sidebar into the
+   main area. Trace and paint became separate controls, camera-follow stayed
+   a sibling rather than a child. Reset view in a canvas corner. URL state
+   (`#solid/tab/palette`).
+3. ~~**Colour in the diagram.**~~ *(done)* The two caps stay filled at about
+   half opacity rather than fading to a line drawing, and the outer region —
+   the face we looked *through*, which a Schlegel diagram turns inside out —
+   is washed in its own cap's colour, strongest against the outline and dying
+   to the background well before the canvas edge. A flat fill would have read
+   as a backdrop; the falloff reads as a region continuing outward. It is
+   painted by the same `cut()` the faces use, so it greys until the seam
+   claims it, and it takes the cap it genuinely belongs to — which is why
+   along a stretch of outline the cycle does *not* run, the wash and the face
+   inside it are the same colour. That is the point: there the outer face is
+   still joined to its cap. A census line under the stats, from
+   `hardware/scripts/census.py`.
 4. **Drawing the cycle.** Drag across vertices in the Diagram tab; the solid
    splits when the loop closes. Brings with it the "Make it" explanation of
    why a given cut is or is not printable, which cannot be tested before
@@ -147,9 +156,6 @@ trapezohedron offers a real choice: both of its forms give congruent halves.
 
 ## Open questions
 
-- Should the final diagram keep its faces filled, or fade to a line drawing?
-  The blank version already exists as the printable Schlegel PDF, which
-  argues for filling the one on screen.
 - How much help while drawing? Marking vertices that have become unreachable
   is the "trapped" lesson made live; warning that *no completion exists* is
   cheap at 12–20 vertices but may steal the discovery.

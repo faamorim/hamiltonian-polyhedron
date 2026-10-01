@@ -100,7 +100,7 @@ mathematics-and-art course project (EDCP 342).
 
 ```
 index.html              the visualizer; three.js is vendored in vendor/
-polyhedra.js            generated — the solids, from hardware/scripts/polyhedra.py
+polyhedra.js            generated — the solids and their cycle census
 downloads.js            generated — what the page offers, and its real figures
 hardware/scripts/       every generator and check
 hardware/tests/         the generated STLs, PDFs and renders
@@ -120,6 +120,15 @@ drift from the files you download. The solids are defined once, in
 `hardware/scripts/polyhedra.py`, which checks each one — Euler's formula, the
 cycle visiting every vertex exactly once, every step of it a real edge, every
 face planar — and the page reads what passed.
+
+It also carries each solid's census, enumerated by
+`hardware/scripts/census.py`: every Hamiltonian cycle, how many are
+essentially different once the solid's own symmetries are divided out, how
+many of those fold into two flat strips, and whether the cut we ship has
+congruent halves. That last one is why a single STL can be printed twice. The
+enumeration agrees with the literature where it has an opinion — 30 cycles on
+the dodecahedron, Hamilton's own icosian game, and 1280 undirected on the
+icosahedron — and it runs in about two seconds for all six.
 
 The checks are the interesting part of the scripts. Each generator measures
 its result off the finished mesh instead of trusting the design: the seam is

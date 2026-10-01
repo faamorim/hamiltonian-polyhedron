@@ -124,11 +124,23 @@
     display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:6px;
     border:1px solid var(--panel-border);
   }
+  /* The outer region's swatch fades out the way the region does, because
+     what it is naming is not a colour but a colour running off the page. */
+  #legend .swatch.outer{
+    width:22px; margin-right:4px; border-color:transparent;
+    background:linear-gradient(to right, var(--outer, var(--groupB)), transparent);
+  }
+  #legend .outer-row{ color:var(--text-dim); }
   #stats{
     margin-top:6px; padding-top:14px; border-top:1px solid var(--panel-border);
     font-size:0.8rem; color:var(--text-dim); line-height:1.6;
   }
   #stats b{ color:var(--text); }
+  .census{
+    margin-top:9px; padding-top:9px;
+    border-top:1px solid var(--panel-border);
+    font-size:0.76rem; line-height:1.55;
+  }
   #downloadList{
     font-size:0.8rem; color:var(--text-dim); line-height:1.5;
     display:grid; gap:10px 14px; max-width:860px;
@@ -260,6 +272,7 @@
         <div><span class="swatch" style="background:var(--groupA)"></span>Cap A</div>
         <div><span class="swatch" style="background:var(--groupB)"></span>Cap B</div>
         <div><span class="swatch" style="background:var(--seam)"></span>Hamiltonian cycle (seam)</div>
+        <div class="outer-row" data-tabs="diagram"><span class="swatch outer"></span>Outside &mdash; the face you look through</div>
       </div>
       <div id="stats" data-tabs="solid diagram make"></div>
       <div id="credit">
@@ -299,7 +312,8 @@
     var d = window.POLYHEDRA_DATA[key];
     POLYHEDRA[key] = {
       label: d.label, available: true,
-      vertices: d.vertices, faces: d.faces, cycle: d.cycle
+      vertices: d.vertices, faces: d.faces, cycle: d.cycle,
+      census: d.census
     };
   });
 
@@ -576,6 +590,24 @@
   // animation skipped its own first sentence. The holds are there so each
   // stage is read as having finished before the next one starts.
   var TURN = [0.0, 0.28], OPEN = [0.38, 0.56], BURST = [0.60, 1.0];
+  var DIAGRAM_FILL = 0.52;   // how much of the surface the diagram keeps
+  // The outer face. A Schlegel diagram has as many regions as the solid has
+  // faces -- but one of them is the whole of the plane outside the drawing,
+  // which is the face we looked THROUGH, turned inside out. Nothing on the
+  // page said so: the reader counted the regions, came up one short, and had
+  // no way to find the missing one.
+  //
+  // So it is tinted. Not a flat fill of the viewport -- that reads as a
+  // backdrop, something the drawing sits ON -- but a wash that is strongest
+  // against the outline and dies away outward, which reads as a region that
+  // CONTINUES past the edge of the picture. It takes the colour of the cap
+  // the view face belongs to, and it takes it at the same moment that face
+  // would have taken it, so the count and the painting both come out right.
+  var HALO_REACH = 3.0;    // outward, in multiples of the view face's radius
+  var HALO_ALPHA = 0.30;   // against the outline, before the morph fades it in
+  var HALO_FALL = 3;       // how sharply it dies: higher is tighter to the rim
+  var HALO_RINGS = 10;     // bands the falloff is sampled over
+  var halo = null;
   var morphHome = null;    // the camera to give back when it unflattens
   var TURN_DEG_PER_SEC = 120;   // how fast the solid swings to face the reader
   var TURN_MIN = 0.28;          // seconds, so a tiny turn is still a turn
@@ -614,6 +646,7 @@
     if (currentGroups){
       currentGroups.forEach(function(g){ scene.remove(g); });
     }
+    dropHalo();
     currentGroups = null;
     currentDirections = null;
     currentMorph = null;
@@ -652,9 +685,12 @@
   // holding the face has to go second.
   function cutViewFace(face){
     currentMorph.viewFace = face;
-    currentMorph.caps.forEach(function(c){
+    currentMorph.caps.forEach(function(c, ci){
       var span = null;
       c.spans.forEach(function(sp){ if (sp.face === face) span = sp; });
+      // Which half the outer region belongs to, and when the seam claims it.
+      // The outer face is still one of the solid's faces; it has a side.
+      if (span){ currentMorph.viewCap = ci; currentMorph.viewPaintAt = span.paintAt; }
       c.geo.clearGroups();
       if (!span){
         c.geo.addGroup(0, c.total, 0);
@@ -678,6 +714,87 @@
       // interior is on the screen before the face blends over it.
       c.mesh.renderOrder = 1;
     });
+  }
+
+  function dropHalo(){
+    if (!halo) return;
+    scene.remove(halo);
+    halo.geometry.dispose();
+    halo.material.dispose();
+    halo = null;
+  }
+
+  // The wash outside the diagram, built from the view face's own outline.
+  //
+  // Its inner rim IS that outline -- the face's vertices where the flattening
+  // leaves them, which is where it found them, since Tutte pins the view
+  // face and the fit carries that pinned polygon back onto the real one. So
+  // the tint meets the drawing exactly, with no seam of its own to explain.
+  //
+  // Outward it is rings of the same polygon scaled about its centre, so
+  // neighbouring bands share their corners and the fan has no cracks, and
+  // the alpha falls off a power curve to nothing by HALO_REACH. Far enough
+  // out that the curve's tail, not its end, is what reaches the edge of the
+  // canvas: a ring that finished on screen would draw a border, which is the
+  // one thing a region continuing outward must not have.
+  function buildHalo(){
+    dropHalo();
+    if (!currentMorph || !currentMorph.flat || currentMorph.viewFace < 0) return;
+    var vf = currentMorph.data.faces[currentMorph.viewFace];
+    var c = new THREE.Vector3();
+    vf.forEach(function(vi){ c.add(currentMorph.flat[vi]); });
+    c.divideScalar(vf.length);
+
+    var pos = [], col = [];
+    function ring(j){
+      var s = 1 + (HALO_REACH - 1) * j / HALO_RINGS;
+      return vf.map(function(vi){
+        return c.clone().addScaledVector(
+          _a.copy(currentMorph.flat[vi]).sub(c), s);
+      });
+    }
+    function alpha(j){ return Math.pow(1 - j / HALO_RINGS, HALO_FALL); }
+    for (var j = 0; j < HALO_RINGS; j++){
+      var inner = ring(j), outer = ring(j + 1);
+      var ai = alpha(j), ao = alpha(j + 1);
+      for (var k = 0; k < vf.length; k++){
+        var k2 = (k + 1) % vf.length;
+        // Two triangles per band segment. The rgb is white throughout: the
+        // hue lives on the material, because it changes as the seam paints
+        // and rewriting one colour beats rewriting the whole buffer.
+        [[inner[k], ai], [inner[k2], ai], [outer[k2], ao],
+         [inner[k], ai], [outer[k2], ao], [outer[k], ao]].forEach(function(e){
+          pos.push(e[0].x, e[0].y, e[0].z);
+          col.push(1, 1, 1, e[1]);
+        });
+      }
+    }
+    var geo = new THREE.BufferGeometry();
+    geo.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+    // Four components, so the alpha rides along per vertex -- r128 reads
+    // itemSize 4 as a colour WITH alpha and multiplies it into the material's.
+    geo.setAttribute("color", new THREE.Float32BufferAttribute(col, 4));
+    halo = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
+      vertexColors: true, transparent: true, opacity: 0,
+      side: THREE.DoubleSide, depthWrite: false, depthTest: false }));
+    // Behind everything. It is the ground the diagram is drawn on, and it
+    // has no depth of its own worth defending: writing depth would let it
+    // punch a hole in the solid it is still flying out of.
+    halo.renderOrder = -1;
+    halo.visible = false;
+    scene.add(halo);
+    paintHalo();
+  }
+
+  // The outer region takes its cap's colour exactly when the face it came
+  // from would have -- same grey, same lerp, same cut(). See applyFaces.
+  function paintHalo(){
+    if (!halo || !currentMorph || currentMorph.viewCap === undefined) return;
+    halo.material.color.setHex(NEUTRAL).lerp(
+      _cap.setHex(PALETTES[paletteName].caps[currentMorph.viewCap]),
+      cut(currentMorph.viewPaintAt));
+    document.documentElement.style.setProperty(
+      "--outer", "#" + halo.material.color.getHexString());
   }
 
   // Which way up to hold the diagram -- the nearest way, not the canonical one.
@@ -741,6 +858,7 @@
     currentMorph.turnSeconds = Math.min(TURN_MAX, Math.max(TURN_MIN,
       THREE.MathUtils.radToDeg(pick.angle) / TURN_DEG_PER_SEC));
     cutViewFace(pick.face);
+    buildHalo();
   }
 
   function restoreFlatView(){
@@ -1058,7 +1176,33 @@
       "<b>" + data.faces.length + "</b> faces &middot; " +
       "<b>" + data.cycle.length + "</b>-edge cycle<br>" +
       "Cap A: <b>" + faceCounts[0] + "</b> faces, " + data.vertices.length + " vertices<br>" +
-      "Cap B: <b>" + faceCounts[1] + "</b> faces, " + data.vertices.length + " vertices";
+      "Cap B: <b>" + faceCounts[1] + "</b> faces, " + data.vertices.length + " vertices" +
+      censusLine(data);
+  }
+
+  // How many ways this solid could have been cut, and why it was cut this way.
+  // Computed at build time by hardware/scripts/census.py and carried in
+  // polyhedra.js, because the interesting part is not that a Hamiltonian cycle
+  // exists -- it is how few of them give something you can print.
+  function censusLine(data){
+    var c = data.census;
+    if (!c) return "";
+    var n = function(x, one, many){
+      return "<b>" + x + "</b> " + (x === 1 ? one : (many || one + "s"));
+    };
+    var parts = [n(c.cycles, "Hamiltonian cycle"),
+                 n(c.forms, "essentially different", "essentially different")];
+    // Worth saying only where it costs something. On four of the six every
+    // cycle folds, so "all of them" is not news.
+    if (c.strips < c.cycles) parts.push(n(c.strips, "folds", "fold") + " into two strips");
+    return "<div class=\"census\">" + parts.join(" &middot; ") + "<br>" +
+      (c.congruent
+         ? "this cut's two halves are congruent &mdash; which is what lets one file be printed twice"
+         : "this cut's halves are not congruent") +
+      (c.stripForms > 1
+         ? ", and it is one of <b>" + c.stripForms + "</b> that fold"
+         : "") +
+      "</div>";
   }
 
   // ---- printable files for the selected shape ----
@@ -1360,6 +1504,7 @@
       inl.traceU = cut(inl.paintAt);
       inlayFade(inl);
     });
+    paintHalo();
   }
 
   // An inlay is faded by two things that do not know about each other -- the
@@ -1530,15 +1675,30 @@
     tabButtons[name].addEventListener("click", function(){ showTab(name); });
   });
 
+  // What the camera was doing before the diagram took it over.
+  var camModes = null;
+
   function setFlattened(on){
     if (on && (!currentMorph || !currentMorph.canFlatten)) return;
     morphTarget = on ? 1 : 0;
+    if (!on && camModes){
+      autoRotate.checked = camModes.rotate; controls.autoRotate = camModes.rotate;
+      followSeam.checked = camModes.follow; following = camModes.follow;
+      if (camModes.follow) camT = tracing ? traceT : 0;
+      camModes = null;
+    }
     if (on){
       // Now, while the camera is still where the reader put it. A moment
       // later it is on its way and the question has no answer.
       replan();
-      autoRotate.checked = false; controls.autoRotate = false;
-      followSeam.checked = false; following = false;
+      // Suspended, not switched off. Both of these drive the camera, and the
+      // diagram holds the camera itself, so they have to stand down while it
+      // does -- but the reader asked for them, and unticking a box they
+      // ticked is the page overruling them rather than taking a turn. They
+      // are given back when the solid is.
+      camModes = { rotate: autoRotate.checked, follow: followSeam.checked };
+      controls.autoRotate = false;
+      following = false;
       captureHome();
       // The caps close on their own clock before the morph starts, in the
       // animation loop. Slamming them shut here threw away the one moment
@@ -1658,7 +1818,15 @@
     // filled face to fight for the same plane, once the face being looked
     // through -- the one that became the outer boundary -- has gone.
     var viewFade = 1 - beat(morphT, OPEN[0], OPEN[1]);
-    var fade = 1 - beat(morphT, 0.74, 0.99);
+    // The surface recedes but does not go. A Schlegel diagram's faces tile
+    // their region without overlapping, so the two caps survive the flattening
+    // as coloured areas -- which is the same claim the solid makes, carried
+    // across rather than dropped at the end of the journey. It is also what
+    // gives "paint the caps as it cuts" something to paint in the diagram.
+    //
+    // The blank version is not lost: it is the Schlegel PDF in Make it, which
+    // exists precisely to be drawn on by hand.
+    var fade = 1 - (1 - DIAGRAM_FILL) * beat(morphT, 0.74, 0.99);
     currentMorph.faceMats.forEach(function(m){ setFade(m, fade, false); });
     currentMorph.viewMats.forEach(function(m){ setFade(m, Math.min(fade, viewFade), true); });
     // The inlays go with the turn, not with the surface. They are proud of
@@ -1688,6 +1856,15 @@
     // face we look through, while there is already something to watch, and
     // reaches full strength as the surface goes and the drawing becomes the
     // only thing left.
+    // In with the last of the surface, not with the face it replaces. The
+    // face goes at OPEN, while the solid is still a solid and the outline is
+    // still a face of it -- a wash spreading from it there would be a flare
+    // off the side of a polyhedron. It belongs to the finished drawing, so it
+    // arrives with it, as the thing the outline turns into.
+    if (halo){
+      halo.material.opacity = HALO_ALPHA * beat(morphT, 0.78, 1.0);
+      halo.visible = halo.material.opacity > 0.004;
+    }
     var wireOp = 0.55 * beat(morphT, OPEN[0], OPEN[1])
                + 0.45 * beat(morphT, 0.74, 0.95);
     currentMorph.wires.forEach(function(w){
@@ -1724,7 +1901,10 @@
       var dist = morphHome.dist * (1 - e) + framed * e;
       camera.position.copy(controls.target).addScaledVector(_a, dist);
     }
-    controls.enableRotate = morphT < 0.02;
+    // Riding the seam also takes the orbit, so the morph must not hand it
+    // back on its last frame and undo that. It matters now that following
+    // survives a trip to the diagram and back.
+    controls.enableRotate = morphT < 0.02 && !following;
     // Greyed, not removed. There is no camera to auto-rotate and no pair of
     // caps to pull apart once the solid is a flat drawing, but taking the
     // rows out of the sidebar reflowed every row below them, so the panel
