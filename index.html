@@ -2021,8 +2021,14 @@
     if (readingHash) return;
     var want = "#" + [currentKey, currentTab, paletteName].join("/");
     if (location.hash !== want){
-      history.replaceState(null, "", want);   // replace, so the back button
-    }                                         // is not filled with view changes
+      // Replace, so the back button is not filled with view changes. In a
+      // try, because this is a convenience and not the feature: a sandboxed
+      // frame refuses to touch history at all, and Safari throws once a page
+      // calls replaceState often enough. Either way the view is already
+      // correct -- only the URL fails to say so -- and letting it throw would
+      // take the click that caused it down with it.
+      try { history.replaceState(null, "", want); } catch (e) {}
+    }
   }
   function readHash(){
     var parts = (location.hash || "").replace(/^#/, "").split("/");
