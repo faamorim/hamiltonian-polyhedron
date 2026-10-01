@@ -77,6 +77,14 @@
     margin:0 0 20px; font-size:0.85rem; color:var(--text-dim); max-width:62ch;
   }
   #canvas-wrap canvas{ display:block; width:100%; height:100%; }
+  #resetView{
+    position:absolute; right:12px; bottom:12px; z-index:2;
+    appearance:none; cursor:pointer; font:inherit; font-size:0.74rem;
+    color:var(--text-dim); background:rgba(22,25,38,0.72);
+    border:1px solid var(--panel-border); border-radius:6px; padding:5px 9px;
+  }
+  #resetView:hover{ color:var(--text); border-color:var(--accent); }
+  #resetView:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; }
   #sidebar{
     width:280px; flex:none;
     padding:16px; overflow-y:auto;
@@ -161,6 +169,11 @@
   #credit a{ color:var(--accent); text-decoration:none; }
   #credit a:hover{ text-decoration:underline; }
   .checkbox-row{ display:flex; align-items:center; gap:8px; font-size:0.85rem; }
+  /* A control that only means anything while its parent is on. Indented and
+     tethered rather than merely adjacent, so the dependency is visible before
+     you try it. */
+  .field.sub{ margin-left:14px; padding-left:12px; margin-top:-10px;
+              border-left:1px solid var(--panel-border); }
   .checkbox-row input{ width:auto; }
   option:disabled{ color:#5b6070; }
   @media (max-width: 720px){
@@ -188,7 +201,10 @@
         <button class="tab" id="tabMake"    role="tab" data-tab="make"
                 aria-selected="false">Make it</button>
       </div>
-      <div id="canvas-wrap"></div>
+      <div id="canvas-wrap">
+        <button id="resetView" type="button"
+                title="Back to the starting view">Reset view</button>
+      </div>
       <div id="makePane" hidden>
         <h2>Make it</h2>
         <p>One cut, in paper and in plastic. The sizes are a ladder rather than
@@ -230,7 +246,11 @@
       </div>
       <div class="field checkbox-row" data-tabs="solid diagram">
         <input type="checkbox" id="traceCycle">
-        <label for="traceCycle" style="margin:0; text-transform:none; letter-spacing:normal;">Trace the cycle &mdash; watch it split the solid</label>
+        <label for="traceCycle" style="margin:0; text-transform:none; letter-spacing:normal;">Draw the cycle</label>
+      </div>
+      <div class="field checkbox-row sub" data-tabs="solid diagram">
+        <input type="checkbox" id="paintCaps" checked>
+        <label for="paintCaps" style="margin:0; text-transform:none; letter-spacing:normal;">Paint the caps as it cuts</label>
       </div>
       <div class="field checkbox-row" data-tabs="solid">
         <input type="checkbox" id="followSeam">
@@ -467,6 +487,11 @@
 
   var camera = new THREE.PerspectiveCamera(45, 1, 0.1, 100);
   camera.position.set(4.2, 3.2, 5.2);
+  // Where "reset view" goes. Rotation undoes itself -- drag back -- but zoom
+  // does not: the wheel can put you inside the solid or out at a speck, and
+  // there is no landmark to aim at on the way back.
+  var HOME_POS = camera.position.clone();
+  var HOME_UP = camera.up.clone();
 
   var renderer = new THREE.WebGLRenderer({ antialias: true });
   wrap.appendChild(renderer.domElement);
@@ -571,6 +596,13 @@
   var _a = new THREE.Vector3();
   var seamWidth = 1.0;     // the slider
   var tracing = false;
+  // Whether the caps take their colour as the seam crosses them. It used to be
+  // welded to the trace, so asking to watch the cycle drawn also forced the
+  // solid grey until it had been cut past. With it off, the caps keep their
+  // colours and the seam simply draws over them -- which is a mode the page
+  // did not have, and the right one for "where does the cut go on a solid I
+  // have already understood".
+  var painting = true;
   var traceT = 0;          // how far the walk has got, in cycle edges
   var following = false;   // camera rides the walk
   var camT = 0;            // ... and its own clock, for when nothing is tracing
@@ -1298,7 +1330,7 @@
   // actually means something.
   var PAINT_LAG = 0.5;      // of the edge, before any colour moves at all
   function cut(paintAt){
-    if (!tracing) return 1;
+    if (!tracing || !painting) return 1;
     var x = Math.min(1, Math.max(0, traceT - (paintAt - 1)));
     var t = Math.max(0, (x - PAINT_LAG) / (1 - PAINT_LAG));
     return t * t;
@@ -1382,12 +1414,14 @@
     currentKey = select.value;
     buildShape(currentKey);
     showDownloads(currentKey);
+    writeHash();
   });
 
   var paletteSelect = document.getElementById("paletteSelect");
   paletteSelect.addEventListener("change", function(){
     paletteName = paletteSelect.value;
     applyPalette();
+    writeHash();
   });
 
   var sepSlider = document.getElementById("sepSlider");
@@ -1413,9 +1447,19 @@
     applySeam();
   });
 
+  var paintCaps = document.getElementById("paintCaps");
+  paintCaps.addEventListener("change", function(){
+    painting = paintCaps.checked;
+    applyFaces();
+  });
+
   var traceCycle = document.getElementById("traceCycle");
   traceCycle.addEventListener("change", function(){
     tracing = traceCycle.checked;
+    // Painting is defined by how far the walk has got, so it has nothing to
+    // say when there is no walk.
+    paintCaps.disabled = !tracing;
+    paintCaps.closest(".field").classList.toggle("off", !tracing);
     traceT = 0;
     applySeam();
     applyFaces();
@@ -1479,6 +1523,7 @@
     // back up -- quietly, since the canvas is hidden -- and the reader finds
     // it whole when they return.
     setFlattened(name === "diagram");
+    writeHash();
   }
 
   TABS.forEach(function(name){
@@ -1526,6 +1571,29 @@
       up: camera.up.clone()
     };
   }
+
+  // Back to where the page opened. Only offered on the Solid tab: the Diagram
+  // frames itself, and there is nothing to orbit on Make it.
+  document.getElementById("resetView").addEventListener("click", function(){
+    if (currentTab === "diagram"){ showTab("solid"); return; }
+    // Spend the momentum before resetting, or the reset gets undone.
+    //
+    // Damping is on at 0.08, so a drag leaves a sphericalDelta that keeps
+    // being applied for a while after the mouse is up. OrbitControls' own
+    // reset() restores the camera and then calls update(), which applies
+    // whatever delta is still owed -- so it put the camera home and pushed
+    // it straight back off again. Measured: 1.9% of pixels wrong, the solid
+    // visibly a few degrees round.
+    //
+    // With damping off, update() applies the delta once and then zeroes it
+    // (sphericalDelta.set(0,0,0)), so one un-damped update spends the
+    // momentum and leaves nothing for reset's own update to re-apply.
+    camera.up.copy(HOME_UP);
+    controls.enableDamping = false;
+    controls.update();
+    controls.reset();
+    controls.enableDamping = true;
+  });
 
   var autoRotate = document.getElementById("autoRotate");
   autoRotate.addEventListener("change", function(){
@@ -1763,10 +1831,40 @@
     renderer.render(scene, camera);
   }
 
+  // The view, in the address bar: #solid/tab/palette. A link can then open on
+  // a particular picture -- the dodecahedron's diagram in yin-yang -- which is
+  // the difference between "go to the site and click around" and putting the
+  // exact thing in a slide or a message. Written whenever any of the three
+  // changes, read once on the way in.
+  var readingHash = false;
+  function writeHash(){
+    if (readingHash) return;
+    var want = "#" + [currentKey, currentTab, paletteName].join("/");
+    if (location.hash !== want){
+      history.replaceState(null, "", want);   // replace, so the back button
+    }                                         // is not filled with view changes
+  }
+  function readHash(){
+    var parts = (location.hash || "").replace(/^#/, "").split("/");
+    var solid = parts[0], tab = parts[1], pal = parts[2];
+    readingHash = true;
+    if (pal && PALETTES[pal]){ paletteName = pal; paletteSelect.value = pal; }
+    if (solid && POLYHEDRA[solid] && POLYHEDRA[solid].available){
+      currentKey = solid; select.value = solid;
+    }
+    readingHash = false;
+    return tab;
+  }
+
   resize();
+  var wantTab = readHash();
   showTab("solid");
-  buildShape("icosahedron");
-  showDownloads("icosahedron");
+  applyPalette();                 // which rebuilds the shape for currentKey
+  showDownloads(currentKey);
+  if (wantTab && wantTab !== "solid") showTab(wantTab);
+  // The nested control starts with nothing to act on.
+  paintCaps.disabled = true;
+  paintCaps.closest(".field").classList.add("off");
   animate();
 })();
 </script>
