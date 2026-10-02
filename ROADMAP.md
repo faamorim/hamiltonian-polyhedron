@@ -105,7 +105,13 @@ are offered.
 
 ## Later
 
-- **The lights over-drive the brightest faces.** Measured on the icosahedron:
+- **The lights over-drive the brightest faces _on the solid_.** The diagram is
+  fixed: its faces are coplanar, so the lights could only ever apply one
+  multiplier to all of them, and that multiplier was 1.65. The keys now fade
+  out over the explosion while the ambient rises to the value that renders a
+  surface at exactly its own colour, so the finished diagram is flat and
+  measures the palette's red and teal to within one count. The solid still
+  clips. Measured on the icosahedron:
   the red cap renders at `(255, 94, 86)` — the red channel pinned, so the
   measured saturation falls from 0.66 to 0.51 purely because the channel has
   no room left. It clips on the *solid*, not only in the diagram; the old

@@ -1370,6 +1370,20 @@
         new Float32Array(capPairs.length * 6), 3));
       var capWire = new THREE.LineSegments(wireGeo, new THREE.LineBasicMaterial({
         color: 0x9aa3b4, transparent: true, opacity: 0 }));
+      // Above BOTH cap meshes, which sit at 0 and 1.
+      //
+      // It used to default to 0, and cutViewFace lifts the cap holding the
+      // face we look through to 1 -- so that cap was drawn after its own
+      // wireframe and painted over it. The lines survived anyway, almost
+      // everywhere, because polygonOffset pushes the faces back and the
+      // depth test then rejects them where a line has already drawn. Almost:
+      // in the diagram every face is coplanar with every other, so that
+      // margin is the only thing holding the line up, and from some angles
+      // one interior edge of that cap lost it and simply vanished. Drawing
+      // order is the thing that was wrong; the depth test was covering for
+      // it. Depth testing stays on, because on the closed solid the
+      // wireframe genuinely must be hidden by the faces in front of it.
+      capWire.renderOrder = 2;
       container.add(capWire);
       wires.push({ mesh: capWire, pairs: capPairs });
 
@@ -1827,12 +1841,35 @@
     document.getElementById("legendAText").textContent =
       oneColour ? "Both caps" : "Cap A";
     scene.background = new THREE.Color(pal.bg);
-    ambient.intensity = pal.amb;
-    key1.intensity = pal.k1;
-    key2.intensity = pal.k2;
+    applyLighting();
     document.documentElement.style.setProperty("--groupA", pal.css[0]);
     document.documentElement.style.setProperty("--groupB", pal.css[1]);
     buildShape(currentKey);      // the inlays exist or they do not
+  }
+
+  // The lights go out as the solid stops being one.
+  //
+  // A Schlegel diagram's faces are all coplanar, so whatever the lights do to
+  // one of them they do to all of them -- the "shading" on a finished diagram
+  // is a single multiplier carrying no information at all. And it was a
+  // multiplier greater than one: face-on to both keys is the brightest a face
+  // can be, so the diagram sat at the top of the solid's range and past it.
+  // Measured on the icosahedron, the red cap came out at (255, 135, 125) --
+  // red pinned, 1.65x its own colour, saturation down from 0.66 to 0.51
+  // purely because the channel had run out of room.
+  //
+  // So the keys fade out over the explosion and the ambient rises to the one
+  // value that renders a surface at exactly its own colour. The diagram ends
+  // up flat and exactly the palette's red and teal, which is also exactly
+  // what the legend swatches show. The solid is untouched: at morphT 0 this
+  // is the palette's own lighting, unchanged.
+  var DIAGRAM_AMBIENT = 1.05;   // measured: rendered = albedo x 0.951 x ambient
+  function applyLighting(){
+    var pal = PALETTES[paletteName];
+    var f = beat(morphT, BURST[0], BURST[1]);
+    ambient.intensity = pal.amb + (DIAGRAM_AMBIENT - pal.amb) * f;
+    key1.intensity = pal.k1 * (1 - f);
+    key2.intensity = pal.k2 * (1 - f);
   }
 
   // Where the walk's head is, as a point on the cycle.
@@ -2282,6 +2319,7 @@
     // their region without overlapping: there is nothing at the end for a
     // filled face to fight for the same plane, once the face being looked
     // through -- the one that became the outer boundary -- has gone.
+    applyLighting();
     var viewFade = 1 - beat(morphT, OPEN[0], OPEN[1]);
     // The rest of the surface does not fade at all. A Schlegel diagram's
     // faces tile their region without overlapping, so the two caps survive
