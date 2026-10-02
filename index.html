@@ -307,8 +307,8 @@
         <input type="checkbox" id="followSeam">
         <label for="followSeam" style="margin:0; text-transform:none; letter-spacing:normal;">Camera follows the seam</label>
       </div>
-      <div class="field" id="drawField" data-tabs="diagram">
-        <label>Draw your own cycle</label>
+      <div class="field" id="drawField" data-tabs="solid diagram">
+        <label id="drawLabel">Draw your own cycle</label>
         <div id="drawStatus">Drag from any vertex. Blue marks where you may go next.</div>
         <div class="row" id="drawButtons">
           <button type="button" id="drawUndo" disabled>Undo</button>
@@ -900,7 +900,7 @@
   function paintHalo(){
     if (!halo || !currentMorph || currentMorph.viewCap === undefined) return;
     halo.material.color.setHex(NEUTRAL);
-    var drawing = drawPath.length > 0 && !drawComplete();
+    var drawing = drawingOpen();
     if (!drawing){
       halo.material.color.lerp(
         _cap.setHex(PALETTES[paletteName].caps[currentMorph.viewCap]),
@@ -1132,6 +1132,15 @@
     return currentMorph.adj[end].filter(canStep);
   }
 
+  // A line that is started and not yet closed. The page is showing a cut that
+  // does not exist: the geometry is still built along the cycle being
+  // replaced, so pulling the caps apart would separate them along THAT cut
+  // while the colours on them describe a different one. Nothing about the
+  // solid can be trusted to come apart until the loop closes.
+  function drawingOpen(){
+    return drawPath.length > 0 && !drawComplete();
+  }
+
   function drawComplete(){
     return currentMorph && drawPath.length === currentMorph.data.vertices.length
       && currentMorph.adj[drawPath[drawPath.length - 1]].indexOf(drawPath[0]) >= 0;
@@ -1144,9 +1153,20 @@
     // Nothing once the loop has closed: adopting it rebuilds the solid along
     // it, so the seam IS the drawing now. Leaving the pen up would draw every
     // edge twice, in two colours, saying the same thing.
-    var on = currentTab === "diagram" && morphT > 0.98 && !drawComplete();
+    //
+    // It is NOT limited to the diagram. The line is a walk along the solid's
+    // own edges, so it means exactly as much wrapped around the polyhedron as
+    // it does drawn flat -- and a reader who switches to the solid to see what
+    // their half-finished cut looks like in three dimensions should find it
+    // there rather than an empty surface.
+    var on = !drawComplete() && drawPath.length > 0;
     var P = livePositions();
-    var r = SEAM_R * seamWidth * 0.45 * 1.25;   // a shade over the seam's own
+    // The same width the seam itself is using at this moment, including the
+    // thinning it does as it flattens, and a shade over it so the line being
+    // drawn reads as the nearer thing. Taking the diagram's 0.45 as a
+    // constant was wrong twice over: on the solid it drew a seam too thin,
+    // and it had to be kept in step with applySeam by hand.
+    var r = SEAM_R * seamWidth * seamShrink() * 1.25;
     var hintR = r * 1.1;
     drawPools.tubes.forEach(function(t, k){
       t.visible = on && k < drawPath.length - 1;
@@ -1163,7 +1183,9 @@
       d.position.copy(P[drawPath[k]]);
       d.scale.setScalar((r / SEAM_R) * 1.05);
     });
-    var hints = on ? legalNext() : [];
+    // The hints belong to the diagram, which is the only place a vertex can
+    // be clicked. On the solid the line shows, but not the invitation.
+    var hints = (on && currentTab === "diagram" && morphT > 0.98) ? legalNext() : [];
     drawPools.hints.forEach(function(h, k){
       h.visible = k < hints.length;
       if (!h.visible) return;
@@ -1784,12 +1806,16 @@
   // One place decides what the seam looks like, whether the thickness moved,
   // the trace advanced, or a new solid was built -- so the tubes, the vertex
   // dots and the walk cannot end up disagreeing about how far round it is.
+  // Thinner as it flattens: the diagram is one face wide, so the camera ends
+  // up close, and a tube sized for the whole solid reads as a girder. Shared,
+  // so the line the reader is drawing is the same weight as the one the page
+  // draws rather than a constant that has to be kept in step by hand.
+  function seamShrink(){ return 1 - 0.55 * beat(morphT, 0.04, 0.40); }
+
   function applySeam(){
     if (!currentSeam) return;
     applyFaceShape();
-    // Thinner as it flattens: the diagram is one face wide, so the camera
-    // ends up close, and a tube sized for the whole solid reads as a girder.
-    var shrinkSeam = 1 - 0.55 * beat(morphT, 0.04, 0.40);   // with the turn
+    var shrinkSeam = seamShrink();
     var r = SEAM_R * seamWidth * shrinkSeam;
     // A dot is a fixed multiple of the tube it caps, and nothing else.
     //
@@ -1811,7 +1837,7 @@
     // the old one up means the reader's own stroke is lost inside a finished
     // loop that is louder than it and no longer true. The faces have already
     // gone neutral for the same reason; this is the rest of that sentence.
-    if (drawPath.length > 0 && !drawComplete()) r = 0;
+    if (drawingOpen()) r = 0;
     var P = livePositions();
     currentSeam.edges.forEach(function(e){
       var grown = tracing ? Math.min(1, Math.max(0, traceT - e.step)) : 1;
@@ -1858,6 +1884,11 @@
         arr.needsUpdate = true;
       });
     }
+    // The line being drawn is a seam too, and everything that moves one moves
+    // the other. It used to be laid out only when the DRAWING changed, so the
+    // thickness slider -- which calls this and nothing else -- moved every
+    // tube on the page except the reader's own.
+    applyDraw();
   }
 
   // The SURFACE follows the vertices too, not just the seam drawn on it.
@@ -1951,7 +1982,7 @@
     // cap is ALREADY settled, and is right about each one for good. So the
     // surface is repainted from that instead: settled faces take their cap's
     // colour as the line reaches them, the rest stay neutral.
-    var pending = drawPath.length > 0 && !drawComplete();
+    var pending = drawingOpen();
     var sides = pending ? drawSideMap : null;
     currentFaces.buffers.forEach(function(buf){
       var arr = buf.attr.array;
@@ -2253,6 +2284,8 @@
   // frames itself, and there is nothing to orbit on Make it.
   // ---- the drawing, as the reader drives it -----------------------------
   var drawStatus = document.getElementById("drawStatus");
+  var drawField = document.getElementById("drawField");
+  var drawLabel = document.getElementById("drawLabel");
   var drawUndoBtn = document.getElementById("drawUndo");
   var drawResetBtn = document.getElementById("drawReset");
 
@@ -2275,6 +2308,20 @@
   function drawRefresh(){
     if (!currentMorph) return;
     var n = currentMorph.data.vertices.length;
+    // Undo and "original cut" follow the line out of the Diagram tab.
+    //
+    // An unfinished line holds the caps shut, and both of the controls that
+    // could release them used to live in the tab the reader had just left --
+    // so the separation slider sat greyed out on the Solid tab with no way
+    // back and nothing saying why. A lock whose key is in another room is a
+    // trap. On the solid the row appears only when there is a line to act on,
+    // because otherwise there is nothing there to do.
+    if (currentTab === "solid"){
+      drawField.hidden = !drawPath.length && !drawnCycle;
+      drawLabel.textContent = drawingOpen() ? "Your unfinished cycle" : "Your cycle";
+    } else {
+      drawLabel.textContent = "Draw your own cycle";
+    }
     // The caps are coloured for the cut being replaced. Grey them while a
     // line is open: until it closes there is no cut, and the old one's
     // answer sitting under a new one being drawn is the page contradicting
@@ -2289,12 +2336,21 @@
     }
     applyFaces();
     applySeam();
+    var onSolid = currentTab === "solid";
     if (!drawPath.length){
       drawSay(drawnCycle
-        ? "Showing your cycle. Drag from any vertex to draw another."
-        : "Drag from any vertex. Blue marks where you may go next.");
+        ? (onSolid ? "This is the cycle you drew."
+                   : "Showing your cycle. Drag from any vertex to draw another.")
+        : (onSolid ? "" : "Drag from any vertex. Blue marks where you may go next."));
     } else if (drawComplete()){
-      drawSay("Closed, and every vertex visited once \u2014 this is your cut.", "good");
+      drawSay(onSolid
+        ? "This is the cycle you drew, and it cuts the solid in two."
+        : "Closed, and every vertex visited once \u2014 this is your cut.", "good");
+    } else if (onSolid){
+      // Say what is locked and why, where the lock is being felt.
+      drawSay("Your line is unfinished, so it does not cut the solid in two "
+            + "yet and the caps are held shut. Finish it in the Diagram tab, "
+            + "or undo it here.", "bad");
     } else if (drawPath.length === n){
       // Every vertex once, but the ends do not meet. A Hamiltonian PATH,
       // which is a different and easier thing, and worth naming as such --
@@ -2591,7 +2647,8 @@
     // jumped and everything the reader had their eye on moved.
     // Dead while the page is driving them: from the moment the box is
     // ticked, and on the way back until the gap it is restoring has landed.
-    var dead = morphTarget > 0 || morphT > 0.5 || currentSeparation < sepHome - 1e-4;
+    var dead = morphTarget > 0 || morphT > 0.5 || currentSeparation < sepHome - 1e-4
+               || drawingOpen();
     [sepSlider, autoRotate, followSeam].forEach(function(el){
       el.disabled = dead;
       var row = el.closest(".field");
@@ -2647,8 +2704,18 @@
     if (morphTarget > 0 && currentSeparation > 0){
       showSeparation(easeGap(currentSeparation, 0, dt));
       sepMoved = true;
-    } else if (morphTarget <= 0 && morphT <= TURN[1] && currentSeparation < sepHome){
+    } else if (morphTarget <= 0 && morphT <= TURN[1] && currentSeparation < sepHome
+               && !drawingOpen()){
       showSeparation(easeGap(currentSeparation, sepHome, dt));
+      sepMoved = true;
+    } else if (drawingOpen() && currentSeparation > 0){
+      // Shut, and staying shut. Leaving the diagram with a line still open
+      // used to hand the gap back, and the solid came apart along the cycle
+      // being REPLACED -- the old cut separating while the new one's colours
+      // sat on the faces, including the grey of the faces the line had not
+      // reached. The gap is remembered, not lost: sepHome still holds it and
+      // it comes back when the loop closes or the line is cleared.
+      showSeparation(easeGap(currentSeparation, 0, dt));
       sepMoved = true;
     }
     if (sepHome > 0 && morphTarget <= 0 && morphT <= 0 && currentSeparation >= sepHome){

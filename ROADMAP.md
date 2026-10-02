@@ -43,7 +43,12 @@ something we already intend to change.
    whole lesson. When the loop closes the solid re-splits along it: the
    partition, the caps, the stats and the census all fall out of the code
    that already read the shipped cycle. While a line is open the old seam is
-   hidden, because the cut on screen belongs to the cycle being replaced. The
+   hidden and the caps are held shut, because the cut on screen belongs to the
+   cycle being replaced: separating would pull the solid apart along the OLD
+   cycle while the new one's colours sat on the faces. The gap is remembered
+   and handed back when the line closes or is cleared, and the undo and revert
+   controls follow the line onto the Solid tab so the lock is never one the
+   reader cannot reach. The
    caps are **not** blanked, though: faces whose side is already settled take
    their colour as the line reaches them, and only the undecided ones stay
    neutral. The settled ones are settled for good — see below.
