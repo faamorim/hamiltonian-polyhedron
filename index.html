@@ -934,6 +934,12 @@
   var DRAW_HIT = 26;       // px: how near the pointer must come to a vertex
   var PEN = 0xffe066;      // what the reader draws with
   var HINT = 0x6fd0ff;     // where they are allowed to go next
+  // How much of the line survives where the solid is in front of it. Enough
+  // to follow a walk round the back -- which is the whole reason to show it,
+  // since "every vertex exactly once" is a fact about the WHOLE solid and
+  // half a line answers nothing -- and little enough that near and far are
+  // never confused for one another.
+  var GHOST_ALPHA = 0.30;
   var drawPools = null;
 
   function vertexAdjacency(data){
@@ -1078,6 +1084,7 @@
     // ours to dispose. The two materials are.
     drawPools.penMat.dispose();
     drawPools.hintMat.dispose();
+    drawPools.ghostMat.dispose();
     drawPools = null;
   }
 
@@ -1087,7 +1094,7 @@
   // every pointer move would be the one expensive thing in the loop.
   function buildDrawPools(n){
     dropDrawPools();
-    var tubes = [], dots = [], hints = [], all = [];
+    var tubes = [], dots = [], hints = [], ghosts = [], all = [];
     // Both transparent, although the pen is fully opaque, for the reason the
     // cap materials carry the same flag: the flag picks the PASS. Opaque
     // geometry is drawn before any transparent geometry, and renderOrder only
@@ -1099,18 +1106,44 @@
       transparent: true, opacity: 1, depthWrite: false });
     var hintMat = new THREE.MeshBasicMaterial({ color: HINT,
       transparent: true, opacity: 0.85, depthWrite: false });
+    // The same line again, fainter, and allowed through the solid.
+    //
+    // Every piece of the line is drawn twice: once depth-tested, which is the
+    // part in front, and once not, which is everywhere. The ghost goes first
+    // and the solid line paints over it wherever it is really visible, so
+    // what survives of the ghost is exactly the part hidden behind the shape.
+    // No test for "is this edge round the back" is needed -- the depth buffer
+    // already knows, and this just asks it twice.
+    //
+    // The ghost is switched off once the solid has flattened, because a flat
+    // drawing has no behind: every face is coplanar and nothing can hide a
+    // line. Left on it was not quite invisible either -- the depth-tested
+    // copy wins over the faces, which carry polygonOffset, but only where it
+    // covers a pixel fully, so the ghost bled a faint halo through the
+    // antialiased fringe of its own twin. Measured at 3336 pixels and up to
+    // 22/255 before this; nothing afterwards.
+    var ghostMat = new THREE.MeshBasicMaterial({ color: PEN,
+      transparent: true, opacity: GHOST_ALPHA, depthWrite: false,
+      depthTest: false });
     for (var i = 0; i < n; i++){
       var t = new THREE.Mesh(cylGeo, penMat);
       var d = new THREE.Mesh(sphereGeo, penMat);
       var h = new THREE.Mesh(sphereGeo, hintMat);
-      // Over the surface it is drawn on, and never hidden by it.
-      [t, d, h].forEach(function(m){
-        m.renderOrder = 3; m.material.depthTest = false; m.visible = false;
-        scene.add(m); all.push(m);
+      var gt = new THREE.Mesh(cylGeo, ghostMat);
+      var gd = new THREE.Mesh(sphereGeo, ghostMat);
+      // The hints mark where a click would land, and nothing is ever in front
+      // of them that matters, so they stay unconditionally on top.
+      h.material.depthTest = false;
+      [gt, gd].forEach(function(m){ m.renderOrder = 3; });
+      [t, d, h].forEach(function(m){ m.renderOrder = 4; });
+      [t, d, h, gt, gd].forEach(function(m){
+        m.visible = false; scene.add(m); all.push(m);
       });
       tubes.push(t); dots.push(d); hints.push(h);
+      ghosts.push({ tube: gt, dot: gd, of: t, ofDot: d });
     }
-    drawPools = { tubes: tubes, dots: dots, hints: hints, all: all,
+    drawPools = { tubes: tubes, dots: dots, hints: hints, ghosts: ghosts,
+                  ghostMat: ghostMat, all: all,
                   penMat: penMat, hintMat: hintMat };
   }
 
@@ -1182,6 +1215,19 @@
       if (!d.visible) return;
       d.position.copy(P[drawPath[k]]);
       d.scale.setScalar((r / SEAM_R) * 1.05);
+    });
+    // The ghosts are the same pieces in the same places; only the material
+    // differs, so they are copied rather than computed a second time.
+    var ghostOn = morphT < 0.9;
+    drawPools.ghosts.forEach(function(g){
+      [[g.tube, g.of], [g.dot, g.ofDot]].forEach(function(pair){
+        var ghost = pair[0], real = pair[1];
+        ghost.visible = real.visible && ghostOn;
+        if (!ghost.visible) return;
+        ghost.position.copy(real.position);
+        ghost.scale.copy(real.scale);
+        ghost.quaternion.copy(real.quaternion);
+      });
     });
     // The hints belong to the diagram, which is the only place a vertex can
     // be clicked. On the solid the line shows, but not the invitation.

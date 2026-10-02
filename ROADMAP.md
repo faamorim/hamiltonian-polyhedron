@@ -48,7 +48,16 @@ something we already intend to change.
    cycle while the new one's colours sat on the faces. The gap is remembered
    and handed back when the line closes or is cleared, and the undo and revert
    controls follow the line onto the Solid tab so the lock is never one the
-   reader cannot reach. The
+   reader cannot reach.
+
+   On the solid the line is drawn twice: once depth-tested, which is the part
+   in front, and once not, at 30% opacity, which is everywhere. The solid copy
+   paints over the ghost wherever the line is really visible, so what survives
+   of the ghost is exactly the part hidden behind the shape — no test for
+   "is this edge round the back" is needed, since the depth buffer already
+   knows. Showing the hidden part is the point: *every vertex exactly once* is
+   a fact about the whole solid, and half a line answers nothing. The ghost is
+   off in the diagram, where a flat drawing has no behind. The
    caps are **not** blanked, though: faces whose side is already settled take
    their colour as the line reaches them, and only the undecided ones stay
    neutral. The settled ones are settled for good — see below.
