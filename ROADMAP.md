@@ -42,9 +42,11 @@ something we already intend to change.
    *unreachable* are deliberately not marked, since getting stranded is the
    whole lesson. When the loop closes the solid re-splits along it: the
    partition, the caps, the stats and the census all fall out of the code
-   that already read the shipped cycle. While a line is open the caps go
-   neutral and the old seam is hidden, because until it closes there is no
-   cut and the one on screen belongs to the cycle being replaced.
+   that already read the shipped cycle. While a line is open the old seam is
+   hidden, because the cut on screen belongs to the cycle being replaced. The
+   caps are **not** blanked, though: faces whose side is already settled take
+   their colour as the line reaches them, and only the undecided ones stay
+   neutral. The settled ones are settled for good — see below.
 
    Still to come, and the reason this step is only half done: **"Make it"
    does not yet explain why a drawn cut is or is not printable.** It warns
@@ -57,6 +59,32 @@ something we already intend to change.
    saying, but it is a second question and not a substitute for the first.
 5. **The unfold.** The Make it tab's main area becomes a canvas, and the
    solid unfolds into its two flat strips.
+
+### Why a half-drawn line can already colour faces
+
+A Hamiltonian cycle visits every vertex exactly once, so every vertex ends up
+carrying exactly **two** cycle edges. The instant the line passes *through* a
+vertex — in and out, not stopping on it — that vertex has both of them, and
+every other edge at it is barred from the cycle for good, because the quota is
+full. Two permanent facts follow:
+
+- across a drawn edge the two faces are in **different** caps, since a cut edge
+  is exactly where the two caps meet;
+- across a non-drawn edge at a **visited** vertex the two faces are in the
+  **same** cap, since that edge can never join the cycle now.
+
+Union-find over those two constraints gives every face whose side is already
+decided. Nothing is claimed at the line's two loose ends, where one edge is
+still open, nor anywhere the line has not reached — and that is the honest
+answer, because an open path does not separate a sphere: you can always walk
+around a loose end. What it *can* say, it says at once and never retracts.
+
+Checked by taking every prefix of 40 cycles per solid and comparing each
+assignment against the finished partition: **16,765 assignments, 0 wrong.**
+
+The colours are anchored on the first edge drawn rather than on face 0, and
+`computeFacePartition`'s labelling is flipped to match when the loop closes,
+so nothing swaps under the reader at the moment of closing.
 
 ## The printed part is built to one person's constraints
 

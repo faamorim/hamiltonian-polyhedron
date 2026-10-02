@@ -595,7 +595,7 @@
   var PALETTES = {
     standard: { caps: [0xe0524b, 0x3fa7a0], bg: 0x12141c,
                 amb: 0.55, k1: 0.80, k2: 0.35, inlay: false,
-                css: ["#e0524b", "#3fa7a0"] },
+                wire: 0x9aa3b4, css: ["#e0524b", "#3fa7a0"] },
     // The stage is mid-grey on purpose, and lighter than the page. A
     // near-black cap on a near-black background has no silhouette: the
     // faces the light misses merge into the backdrop and the half stops
@@ -604,7 +604,7 @@
     // an edge and the light half keeps its own.
     yinyang:  { caps: [0xf6f1e6, 0x1d1e24], bg: 0x3c414b,
                 amb: 0.80, k1: 0.30, k2: 0.15, inlay: true,
-                css: ["#f6f1e6", "#1d1e24"] },
+                wire: 0x9aa3b4, css: ["#f6f1e6", "#1d1e24"] },
     // One colour for both halves, for reading the diagram as a drawing
     // rather than as a claim about which half is which. The cut is still
     // completely visible -- the seam is drawn in its own colour and runs
@@ -616,7 +616,7 @@
     // the caps as it cuts" would have nothing to show in this palette.
     plain:    { caps: [0x9ba3b0, 0x9ba3b0], bg: 0x12141c,
                 amb: 0.55, k1: 0.80, k2: 0.35, inlay: false,
-                css: ["#9ba3b0", "#9ba3b0"] }
+                wire: 0x4f5765, css: ["#9ba3b0", "#9ba3b0"] }
   };
   var paletteName = "standard";
   var NEUTRAL = 0x767d8d;   // a face the cycle has not reached yet
@@ -636,6 +636,8 @@
   var drawnCycle = null;
   var drawPath = [];       // what is being drawn right now, vertex by vertex
   var lockedViewFace = -1; // the diagram holds still while it is drawn on
+  var drawSideMap = null;  // which cap each face is already known to be in
+  var drawAnchor = null;   // the face that fixed which colour is which
   var morphT = 0;          // 0 = the solid, 1 = the Schlegel diagram
   var morphTarget = 0;     // what it is heading for
   var MORPH_SECONDS = 3.8;
@@ -898,10 +900,17 @@
   function paintHalo(){
     if (!halo || !currentMorph || currentMorph.viewCap === undefined) return;
     halo.material.color.setHex(NEUTRAL);
-    if (!(drawPath.length > 0 && !drawComplete())){
+    var drawing = drawPath.length > 0 && !drawComplete();
+    if (!drawing){
       halo.material.color.lerp(
         _cap.setHex(PALETTES[paletteName].caps[currentMorph.viewCap]),
         cut(currentMorph.viewPaintAt));
+    } else if (drawSideMap && drawSideMap.side[currentMorph.viewFace] !== undefined){
+      // The outer region is a face like any other, and its side settles the
+      // same way. Showing it is the whole point: a reader counting regions
+      // needs the one outside the drawing to be in the count.
+      halo.material.color.setHex(
+        PALETTES[paletteName].caps[drawSideMap.side[currentMorph.viewFace]]);
     }
     document.documentElement.style.setProperty(
       "--outer", "#" + halo.material.color.getHexString());
@@ -938,6 +947,128 @@
       }
     });
     return adj;
+  }
+
+  // Which cap each face will end up in, worked out from a line that is not
+  // finished yet -- and worked out ONCE, because every answer it gives is
+  // final.
+  //
+  // The reason it can be final is the thing that makes a Hamiltonian cycle a
+  // cut in the first place. The cycle visits every vertex exactly once, so
+  // every vertex ends up carrying exactly TWO cycle edges. The moment the
+  // line has passed THROUGH a vertex -- in and out again, not stopped on it
+  // -- that vertex has both of them, and every other edge at it is settled
+  // too: none of them can ever join the cycle, because the quota is full. So
+  // around a visited vertex the fan of faces is split into two arcs by the
+  // two cut edges, and that split cannot change.
+  //
+  // Two kinds of constraint come out of it, and both are permanent:
+  //
+  //   across a drawn edge, the two faces are in DIFFERENT caps -- true of any
+  //   cut edge, since a cut edge is exactly where the two caps meet;
+  //
+  //   across a non-drawn edge at a VISITED vertex, the two faces are in the
+  //   SAME cap -- true because that edge is now barred from the cycle.
+  //
+  // Nothing is claimed at the line's two loose ends, where only one edge is
+  // drawn and the second is still open, nor anywhere the line has not been.
+  // Those faces stay neutral, which is honest: an open path does not separate
+  // a sphere, and you can always walk around a loose end. What the drawing
+  // CAN say, it says immediately and never takes back.
+  function fanAround(v){
+    // The faces around one vertex in cyclic order, with the edge joining each
+    // to the next. Built by crossing from face to face over their shared
+    // edge at v, which is the fan walked the way it is actually arranged.
+    var faces = currentMorph.data.faces;
+    var byEdge = {};
+    faces.forEach(function(f, fi){
+      var i = f.indexOf(v);
+      if (i < 0) return;
+      [f[(i + 1) % f.length], f[(i + f.length - 1) % f.length]].forEach(function(u){
+        (byEdge[edgeKey(v, u)] = byEdge[edgeKey(v, u)] || []).push(fi);
+      });
+    });
+    var start = null;
+    for (var k in byEdge){ start = byEdge[k][0]; break; }
+    if (start === null) return [];
+    var out = [], seen = {}, cur = start, prevEdge = null;
+    while (cur !== null && !seen[cur]){
+      seen[cur] = true;
+      var f = faces[cur], i = f.indexOf(v);
+      var e1 = edgeKey(v, f[(i + 1) % f.length]);
+      var e2 = edgeKey(v, f[(i + f.length - 1) % f.length]);
+      var use = (e1 === prevEdge) ? e2 : e1;
+      var pair = byEdge[use] || [];
+      var nxt = pair.length === 2 ? (pair[0] === cur ? pair[1] : pair[0]) : null;
+      out.push({ face: cur, edge: use, next: nxt });
+      prevEdge = use;
+      cur = nxt;
+    }
+    return out;
+  }
+
+  function drawSides(){
+    if (!currentMorph || drawPath.length < 2) return null;
+    var faces = currentMorph.data.faces;
+    var cut = {}, deg = {};
+    for (var i = 0; i + 1 < drawPath.length; i++){
+      cut[edgeKey(drawPath[i], drawPath[i + 1])] = true;
+      deg[drawPath[i]] = (deg[drawPath[i]] || 0) + 1;
+      deg[drawPath[i + 1]] = (deg[drawPath[i + 1]] || 0) + 1;
+    }
+    // Union-find carrying the parity to the root: same cap, or opposite.
+    var parent = faces.map(function(_, i){ return i; });
+    var par = faces.map(function(){ return 0; });
+    function find(x){
+      if (parent[x] === x) return x;
+      var r = find(parent[x]);
+      par[x] ^= par[parent[x]];
+      parent[x] = r;
+      return r;
+    }
+    var known = {};
+    function link(a, b, diff){
+      var ra = find(a), rb = find(b);
+      known[a] = known[b] = true;
+      if (ra === rb) return;
+      parent[ra] = rb;
+      par[ra] = par[a] ^ par[b] ^ diff;
+    }
+    // Every edge, and which faces it joins.
+    var byEdge = {};
+    faces.forEach(function(f, fi){
+      for (var k = 0; k < f.length; k++){
+        var key = edgeKey(f[k], f[(k + 1) % f.length]);
+        (byEdge[key] = byEdge[key] || []).push(fi);
+      }
+    });
+    // A drawn edge always separates its two faces.
+    Object.keys(cut).forEach(function(key){
+      var pair = byEdge[key];
+      if (pair && pair.length === 2) link(pair[0], pair[1], 1);
+    });
+    // At a vertex the line has passed through, every other edge is barred
+    // from the cycle, so the faces it joins share a cap.
+    Object.keys(deg).forEach(function(vs){
+      if (deg[vs] !== 2) return;
+      fanAround(parseInt(vs, 10)).forEach(function(step){
+        if (step.next === null || cut[step.edge]) return;
+        link(step.face, step.next, 0);
+      });
+    });
+    // Anchor on the first edge drawn, so the two colours are decided once and
+    // do not swap under the reader as the line grows.
+    var firstPair = byEdge[edgeKey(drawPath[0], drawPath[1])];
+    if (!firstPair || firstPair.length !== 2) return null;
+    var anchor = Math.min(firstPair[0], firstPair[1]);
+    var root = find(anchor), base = par[anchor];
+    var out = {};
+    faces.forEach(function(_, fi){
+      if (!known[fi]) return;
+      if (find(fi) !== root) return;
+      out[fi] = par[fi] ^ base;
+    });
+    return { side: out, anchor: anchor };
   }
 
   function dropDrawPools(){
@@ -1167,6 +1298,18 @@
 
     var partition = computeFacePartition(data.faces, cycle);
     var compOf = partition.compOf;
+    // Keep the colours the drawing was already showing.
+    //
+    // computeFacePartition always calls the cap holding face 0 "cap 0", which
+    // is as good a convention as any -- but the reader has just spent a while
+    // watching a line paint faces as it went, and those colours were anchored
+    // on the first edge they drew, not on face 0. Agreeing with the picture
+    // already on screen matters more than agreeing with face 0, so if the two
+    // disagree the partition is relabelled. The caps are symmetric; nothing
+    // downstream can tell which is which.
+    if (drawnCycle && drawAnchor && compOf[drawAnchor.face] !== drawAnchor.side){
+      compOf = compOf.map(function(c){ return 1 - c; });
+    }
 
     // When in the walk each cycle edge is finished, so a face can be told
     // when the seam has reached it. A face is claimed by the FIRST of its
@@ -1368,8 +1511,18 @@
       var wireGeo = new THREE.BufferGeometry();
       wireGeo.setAttribute("position", new THREE.Float32BufferAttribute(
         new Float32Array(capPairs.length * 6), 3));
+      // The wireframe belongs to the palette, like the lighting does.
+      //
+      // It was one fixed slate for every palette, 0x9aa3b4, which was fine
+      // until a palette turned up whose faces are that colour: plain's cap is
+      // 0x9ba3b0, four counts away on the worst channel. Invisible. It had
+      // been hiding behind the lighting -- faces rendered about 1.65x their
+      // own colour, so they diverged from the unlit line -- and flattening the
+      // diagram's lighting took that accident away and left the two exactly
+      // equal. It was never a margin worth relying on. A palette that sets its
+      // own faces now sets the lines that have to read against them.
       var capWire = new THREE.LineSegments(wireGeo, new THREE.LineBasicMaterial({
-        color: 0x9aa3b4, transparent: true, opacity: 0 }));
+        color: PALETTES[paletteName].wire, transparent: true, opacity: 0 }));
       // Above BOTH cap meshes, which sit at 0 and 1.
       //
       // It used to default to 0, and cutViewFace lifts the cap holding the
@@ -1792,11 +1945,14 @@
   function applyFaces(){
     if (!currentFaces) return;
     var caps = PALETTES[paletteName].caps;
-    // A line being drawn is not yet a cut. Until it closes there is no
-    // partition to colour by -- the one on screen belongs to the cycle being
-    // replaced -- so the surface goes back to neutral and the drawing is the
-    // only claim the page is making.
+    // A line being drawn is not yet a cut, so the partition on screen -- which
+    // belongs to the cycle being replaced -- cannot be trusted. But the line
+    // is not silent either: see drawSides, which works out every face whose
+    // cap is ALREADY settled, and is right about each one for good. So the
+    // surface is repainted from that instead: settled faces take their cap's
+    // colour as the line reaches them, the rest stay neutral.
     var pending = drawPath.length > 0 && !drawComplete();
+    var sides = pending ? drawSideMap : null;
     currentFaces.buffers.forEach(function(buf){
       var arr = buf.attr.array;
       _cap.setHex(caps[buf.cap]);
@@ -1808,7 +1964,11 @@
         // SPLITS the solid, and a colour that arrives with the blade says
         // that; one that snaps on afterwards only reports it.
         _c.setHex(NEUTRAL);
-        if (!pending) _c.lerp(_cap, cut(span.paintAt));
+        if (!pending){
+          _c.lerp(_cap, cut(span.paintAt));
+        } else if (sides && sides.side[span.face] !== undefined){
+          _c.setHex(caps[sides.side[span.face]]);
+        }
         for (var i = span.start; i < span.start + span.count; i++){
           arr[i * 3] = _c.r; arr[i * 3 + 1] = _c.g; arr[i * 3 + 2] = _c.b;
         }
@@ -1910,6 +2070,8 @@
     drawPath = [];
     drawnCycle = null;
     lockedViewFace = -1;
+    drawSideMap = null;
+    drawAnchor = null;
     buildShape(currentKey);
     drawRefresh();
     showDownloads(currentKey);
@@ -2119,6 +2281,12 @@
     // itself. This has to run on every change rather than on the first
     // vertex -- "is a line open" is false at the moment the first one is
     // placed, because it is placed after the question is asked.
+    if (!drawComplete()){
+      drawSideMap = drawSides();
+      if (drawSideMap) drawAnchor = { face: drawSideMap.anchor, side: 0 };
+    } else {
+      drawSideMap = null;
+    }
     applyFaces();
     applySeam();
     if (!drawPath.length){
@@ -2192,6 +2360,8 @@
   function drawClear(rebuild){
     drawPath = [];
     lockedViewFace = -1;
+    drawSideMap = null;
+    drawAnchor = null;
     var had = drawnCycle;
     drawnCycle = null;
     if (had && rebuild !== false) buildShape(currentKey);
