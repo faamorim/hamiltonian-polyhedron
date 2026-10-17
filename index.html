@@ -638,6 +638,9 @@
   var lockedViewFace = -1; // the diagram holds still while it is drawn on
   var drawSideMap = null;  // which cap each face is already known to be in
   var drawAnchor = null;   // the face that fixed which colour is which
+  // Which end of the line a drag is currently growing. A path has two, and
+  // both are live: 0 is the vertex it starts at, 1 the vertex it has reached.
+  var drawEnd = 1;
   var morphT = 0;          // 0 = the solid, 1 = the Schlegel diagram
   var morphTarget = 0;     // what it is heading for
   var MORPH_SECONDS = 3.8;
@@ -1062,19 +1065,33 @@
         link(step.face, step.next, 0);
       });
     });
-    // Anchor on the first edge drawn, so the two colours are decided once and
-    // do not swap under the reader as the line grows.
-    var firstPair = byEdge[edgeKey(drawPath[0], drawPath[1])];
-    if (!firstPair || firstPair.length !== 2) return null;
-    var anchor = Math.min(firstPair[0], firstPair[1]);
-    var root = find(anchor), base = par[anchor];
+    // Which face is red and which is teal has to be decided once and then
+    // held, or the two colours swap under the reader as they draw.
+    //
+    // It used to be read off the first edge of the path -- fine while a line
+    // only ever grew from its far end, and wrong the moment it can grow from
+    // its front too, because then drawPath[0] is not a fixed thing. So the
+    // anchor is kept: once a face has a side, that face and that side go on
+    // deciding for the rest of the drawing, whichever end moves. A fresh one
+    // is chosen only when there is none, or when undoing has taken the old
+    // one back out of the settled set.
+    var anchor = -1, anchorSide = 0;
+    if (drawAnchor && known[drawAnchor.face]){
+      anchor = drawAnchor.face;
+      anchorSide = drawAnchor.side;
+    } else {
+      var firstPair = byEdge[edgeKey(drawPath[0], drawPath[1])];
+      if (!firstPair || firstPair.length !== 2) return null;
+      anchor = Math.min(firstPair[0], firstPair[1]);
+    }
+    var root = find(anchor), base = par[anchor] ^ anchorSide;
     var out = {};
     faces.forEach(function(_, fi){
       if (!known[fi]) return;
       if (find(fi) !== root) return;
       out[fi] = par[fi] ^ base;
     });
-    return { side: out, anchor: anchor };
+    return { side: out, anchor: anchor, anchorSide: anchorSide };
   }
 
   function dropDrawPools(){
@@ -1149,20 +1166,41 @@
 
   // Is this a legal next vertex? Adjacent to where we are, and either unused
   // or -- when every vertex has been visited -- the start, which closes it.
-  function canStep(vi){
-    if (!currentMorph) return false;
-    if (!drawPath.length) return true;
-    var end = drawPath[drawPath.length - 1];
-    if (currentMorph.adj[end].indexOf(vi) < 0) return false;
-    if (drawPath.indexOf(vi) < 0) return true;
-    return vi === drawPath[0] && drawPath.length === currentMorph.data.vertices.length;
+  function endVertex(end){
+    return end === 0 ? drawPath[0] : drawPath[drawPath.length - 1];
   }
 
+  // A line grows from both of its ends. Nothing about the maths prefers one:
+  // a Hamiltonian cycle has no direction, and the half-built path is just as
+  // extendable backwards as forwards. Only the pointer needed telling, since
+  // a vertex adjacent to both ends has to attach to one of them.
+  function canStepFrom(end, vi){
+    if (!currentMorph) return false;
+    if (!drawPath.length) return true;
+    var at = endVertex(end);
+    if (currentMorph.adj[at].indexOf(vi) < 0) return false;
+    if (drawPath.indexOf(vi) < 0) return true;
+    // The one used vertex you may step onto is the far end, and only once
+    // every vertex is on the line -- which is what closes the loop.
+    return vi === endVertex(1 - end)
+        && drawPath.length === currentMorph.data.vertices.length;
+  }
+
+  function canStep(vi){
+    return canStepFrom(drawEnd, vi) || canStepFrom(1 - drawEnd, vi);
+  }
+
+  // Everywhere the line may go next, from EITHER end, so the reader sees both
+  // directions open rather than having to discover the second one.
   function legalNext(){
-    if (!currentMorph) return [];
-    if (!drawPath.length) return [];
-    var end = drawPath[drawPath.length - 1];
-    return currentMorph.adj[end].filter(canStep);
+    if (!currentMorph || !drawPath.length) return [];
+    var out = [];
+    [0, 1].forEach(function(end){
+      currentMorph.adj[endVertex(end)].forEach(function(vi){
+        if (canStepFrom(end, vi) && out.indexOf(vi) < 0) out.push(vi);
+      });
+    });
+    return out;
   }
 
   // A line that is started and not yet closed. The page is showing a cut that
@@ -2376,7 +2414,8 @@
     // placed, because it is placed after the question is asked.
     if (!drawComplete()){
       drawSideMap = drawSides();
-      if (drawSideMap) drawAnchor = { face: drawSideMap.anchor, side: 0 };
+      if (drawSideMap) drawAnchor = { face: drawSideMap.anchor,
+                                      side: drawSideMap.anchorSide };
     } else {
       drawSideMap = null;
     }
@@ -2420,21 +2459,53 @@
   // Take one step, if it is a legal one. Stepping back onto the vertex
   // before the current end undoes instead, which is what a finger expects
   // when it retraces its own line.
+  // The vertex one step inside an end -- what retracing onto it undoes.
+  function insideEnd(end){
+    if (drawPath.length < 2) return -1;
+    return end === 0 ? drawPath[1] : drawPath[drawPath.length - 2];
+  }
+
+  // Five things a vertex can mean, tried in this order.
+  //
+  // Growing wins over everything, including growing the end that is not the
+  // active one -- so a click on any marked vertex simply works and the reader
+  // never has to think about ends at all. Picking an end is only how a DRAG
+  // says which one it has hold of, and it has to come before retracing or a
+  // two-vertex line, whose ends are also each other's inside, could never be
+  // grabbed by its front.
   function drawStep(vi){
-    if (vi < 0 || !currentMorph) return;
-    if (drawPath.length > 1 && vi === drawPath[drawPath.length - 2]){
-      drawPath.pop();
+    if (vi < 0 || !currentMorph || drawComplete()) return;
+    if (!drawPath.length){
+      // The first vertex locks the view, because adopting the finished cycle
+      // rebuilds the scene and an unlocked diagram would re-pick its outer
+      // face and redraw itself around the reader's half-finished line.
+      lockedViewFace = currentMorph.viewFace;
+      drawEnd = 1;
+      drawPath.push(vi);
       drawRefresh();
       return;
     }
-    if (drawComplete() || !canStep(vi)) return;
-    // The first vertex locks the view, because adopting the finished cycle
-    // rebuilds the scene and an unlocked diagram would re-pick its outer
-    // face and redraw itself around the reader's half-finished line.
-    if (!drawPath.length) lockedViewFace = currentMorph.viewFace;
-    drawPath.push(vi);
-    if (drawComplete()) adoptDrawn();
-    else drawRefresh();
+    for (var i = 0; i < 2; i++){
+      var end = i === 0 ? drawEnd : 1 - drawEnd;
+      if (!canStepFrom(end, vi)) continue;
+      drawEnd = end;
+      if (end === 0) drawPath.unshift(vi); else drawPath.push(vi);
+      if (drawComplete()) adoptDrawn();
+      else drawRefresh();
+      return;
+    }
+    if (vi === endVertex(0) || vi === endVertex(1)){
+      drawEnd = (vi === endVertex(0)) ? 0 : 1;
+      return;
+    }
+    for (var j = 0; j < 2; j++){
+      var e = j === 0 ? drawEnd : 1 - drawEnd;
+      if (vi !== insideEnd(e)) continue;
+      drawEnd = e;
+      if (e === 0) drawPath.shift(); else drawPath.pop();
+      drawRefresh();
+      return;
+    }
   }
 
   // A closed loop through every vertex is a Hamiltonian cycle, so the solid
@@ -2451,7 +2522,7 @@
 
   function drawUndo(){
     if (!drawPath.length) return;
-    drawPath.pop();
+    if (drawEnd === 0 && drawPath.length > 1) drawPath.shift(); else drawPath.pop();
     if (!drawPath.length) lockedViewFace = -1;
     if (drawnCycle){ drawnCycle = null; var k = drawPath.slice();
                      buildShape(currentKey); drawPath = k; }
@@ -2461,6 +2532,7 @@
 
   function drawClear(rebuild){
     drawPath = [];
+    drawEnd = 1;
     lockedViewFace = -1;
     drawSideMap = null;
     drawAnchor = null;

@@ -37,7 +37,12 @@ something we already intend to change.
    two swatches of one colour name nothing.
 4. ~~**Drawing the cycle.**~~ *(the drawing itself is done)* Drag across
    vertices in the Diagram tab, or click them one at a time; retracing onto
-   the previous vertex steps back. Legal next vertices are marked, because
+   the previous vertex steps back. The line grows from **either** end —
+   nothing about the maths prefers one, since a cycle has no direction and a
+   half-built path is as extendable backwards as forwards. Growing wins over
+   everything, including growing the end that is not the active one, so a
+   click on any marked vertex simply works; picking an end is only how a drag
+   says which one it has hold of. Legal next vertices are marked, because
    that is the board rather than the move — but vertices that have become
    *unreachable* are deliberately not marked, since getting stranded is the
    whole lesson. When the loop closes the solid re-splits along it: the
